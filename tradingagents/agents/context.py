@@ -34,6 +34,37 @@ def get_language_instruction() -> str:
     )
 
 
+def is_options_mode() -> bool:
+    """Whether this run ends in an options structure rather than a directional call."""
+    from tradingagents.dataflows.config import get_config
+    return get_config().get("decision_mode") == "options"
+
+
+# What the risk analysts argue about when the trader's plan is a priced options structure.
+OPTIONS_RISK_FOCUS = (
+    "\n\nThe trader's plan is an options structure with a structure check priced in code against "
+    "the chain. Argue about that structure using the check's computed figures, not figures of your "
+    "own: its maximum loss against its payoff and probability of profit, what it bets on volatility "
+    "(vega), what time decay (theta) costs over the horizon, gamma risk near expiry, the bid-ask "
+    "cost of getting in and out, and whether the expiry and strikes fit the move the options price "
+    "and the skew. Say whether another structure from the same plan would carry the risk better."
+)
+
+
+def options_risk_focus() -> str:
+    """The options brief for a risk analyst, or nothing outside options mode."""
+    return OPTIONS_RISK_FOCUS if is_options_mode() else ""
+
+
+def options_report_line(state: Mapping[str, Any], label: str = "Options market report") -> str:
+    """The options analyst's report as one labelled line, or nothing when the run has none.
+
+    The options analyst is opt-in, so a run without it keeps the prompt it had.
+    """
+    report = (state.get("options_report") or "").strip()
+    return f"{label}: {report}\n" if report else ""
+
+
 def opponent_argument_or_opening(text: str, opponent: str) -> str:
     """Opponent's latest argument, or an explicit opening marker when empty.
 

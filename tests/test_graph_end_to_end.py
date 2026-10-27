@@ -387,3 +387,45 @@ def test_the_memory_step_reads_lessons_as_of_the_trade_date_and_settles_once(tmp
 
     assert asked == ["2026-01-20", "2026-01-20"]
     assert (tmp_path / "log.md").read_text() == log_after_first
+
+
+@pytest.mark.unit
+def test_an_options_mode_run_ends_in_a_priced_structure(tmp_path, monkeypatch, offline):
+    """Options mode swaps the trader and portfolio manager for their options
+    versions: the structure is priced against the chain and the verdict logged."""
+    from tests.test_options_data import _chain
+
+    expiry = "2026-11-26"
+    called_chain: list = []
+    monkeypatch.setitem(router.VENDOR_METHODS["get_option_chain_data"], "deribit",
+                        lambda *a, **k: called_chain.append(a) or _chain(expiry_days=(10, 30)))
+    monkeypatch.setitem(STRUCTURED, schemas.OptionsResearchPlan, schemas.OptionsResearchPlan(
+        recommendation=schemas.PortfolioRating.OVERWEIGHT, rationale="r", strategic_actions="a",
+        volatility_view=schemas.VolatilityView.SHORT, volatility_rationale="IV over RV", horizon_days=30))
+    monkeypatch.setitem(STRUCTURED, schemas.OptionsTradeProposal, schemas.OptionsTradeProposal(
+        strategy=schemas.OptionsStrategy.BULL_PUT_SPREAD, rationale="r", exit_plan="e",
+        legs=[schemas.OptionLegSpec(side="sell", option_type="put", strike=75_000, expiry=expiry),
+              schemas.OptionLegSpec(side="buy", option_type="put", strike=70_000, expiry=expiry)]))
+    monkeypatch.setitem(STRUCTURED, schemas.OptionsPortfolioDecision, schemas.OptionsPortfolioDecision(
+        rating=schemas.PortfolioRating.OVERWEIGHT, structure_decision=schemas.StructureDecision.APPROVE,
+        risk_budget_pct=1.0, executive_summary="s", investment_thesis="t", exit_plan="e"))
+
+    cfg = copy.deepcopy(DEFAULT_CONFIG)
+    cfg.update(results_dir=str(tmp_path / "results"), data_cache_dir=str(tmp_path / "cache"),
+               memory_log_path=str(tmp_path / "log.md"), decision_mode="options")
+    monkeypatch.setattr(trading_graph, "create_tier_client",
+                        lambda config, tier, **k: _Client(ScriptedModel(structured=True)))
+    graph = trading_graph.TradingAgentsGraph(["market", "options"], config=cfg)
+
+    state, signal = graph.propagate("BTC-USD", TRADE_DATE, "crypto")
+
+    assert signal == "Overweight"
+    assert {"get_options_snapshot", "get_option_chain"} <= offline
+    assert called_chain, "the strategist never read the chain"
+    assert "**Volatility View**: Short volatility" in state["investment_plan"]
+    assert "Structure check" in state["trader_investment_plan"]
+    assert "**Structure Decision**: Approve" in state["final_trade_decision"]
+    trade = state["options_trade"]
+    assert trade["decision"] == "Approve" and [leg["strike"] for leg in trade["legs"]] == [75_000, 70_000]
+    assert trade["max_loss"] == pytest.approx(5_000 + trade["net_fill"])
+    assert [e["rating"] for e in graph.memory_log.load_entries()] == ["Overweight"]

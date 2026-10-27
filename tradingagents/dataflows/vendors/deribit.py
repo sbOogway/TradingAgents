@@ -194,6 +194,13 @@ def get_options_snapshot(symbol: str, curr_date: str | None = None) -> str:
     return format_snapshot(chain, closes=closes, iv_index=dvol, iv_index_name=f"DVOL ({chain.underlying})")
 
 
+def get_chain(symbol: str, curr_date: str | None = None) -> OptionChain:
+    """The live chain itself, for code that prices structures; withheld for a past date."""
+    if is_historical(curr_date):
+        raise NoMarketDataError(symbol, detail=f"{VENUE} serves only the live chain; withheld for {curr_date}")
+    return fetch_chain(symbol)
+
+
 def get_option_chain(
     symbol: str, expiry: str = "", moneyness_pct: float = 15.0, curr_date: str | None = None
 ) -> str:

@@ -18,6 +18,7 @@ from tradingagents.dataflows.vendors.alpha_vantage import (
     get_stock as get_alpha_vantage_stock,
 )
 from tradingagents.dataflows.vendors.deribit import (
+    get_chain as get_deribit_chain,
     get_option_chain as get_deribit_option_chain,
     get_options_snapshot as get_deribit_options_snapshot,
 )
@@ -93,6 +94,8 @@ TOOLS_CATEGORIES = {
         "tools": [
             "get_options_snapshot",
             "get_option_chain",
+            # Returns an OptionChain rather than text, for code that prices structures.
+            "get_option_chain_data",
         ]
     }
 }
@@ -163,6 +166,9 @@ VENDOR_METHODS = {
     },
     "get_option_chain": {
         "deribit": get_deribit_option_chain,
+    },
+    "get_option_chain_data": {
+        "deribit": get_deribit_chain,
     },
 }
 

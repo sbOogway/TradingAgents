@@ -284,7 +284,9 @@ def _price(value: float) -> str:
 
 
 def _usd(value: float) -> str:
-    return "n/a" if value is None or math.isnan(value) else f"${_price(value)}"
+    if value is None or math.isnan(value):
+        return "n/a"
+    return f"-${_price(-value)}" if value < 0 else f"${_price(value)}"
 
 
 def _implied_range(forward: float, move: float) -> str:

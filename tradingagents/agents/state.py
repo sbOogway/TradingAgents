@@ -62,6 +62,7 @@ class AgentState(MessagesState):
     investment_plan: Annotated[str, "Investment plan from the Research Manager"]
 
     trader_investment_plan: Annotated[str, "Transaction proposal from the Trader"]
+    options_trade: Annotated[dict, "Options mode: the proposed structure as priced against the chain, and the Portfolio Manager's verdict; empty otherwise"]
 
     # risk management team discussion step
     risk_debate_state: Annotated[

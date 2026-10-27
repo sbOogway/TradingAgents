@@ -2,6 +2,7 @@ from tradingagents.agents.context import (
     get_instrument_context_from_state,
     get_language_instruction,
     opponent_argument_or_opening,
+    options_report_line,
     report_or_absent,
 )
 
@@ -19,9 +20,7 @@ def create_bear_researcher(llm):
         sentiment_report = report_or_absent(state["sentiment_report"], "sentiment")
         news_report = report_or_absent(state["news_report"], "news")
         fundamentals_report = report_or_absent(state["fundamentals_report"], "fundamentals")
-        # The options analyst is opt-in: a run without it keeps the prompt it had.
-        options_report = (state.get("options_report") or "").strip()
-        options_line = f"Options market report: {options_report}\n" if options_report else ""
+        options_line = options_report_line(state)
         instrument_context = get_instrument_context_from_state(state)
         asset_type = state.get("asset_type", "stock")
         target_label = "stock" if asset_type == "stock" else "asset"
