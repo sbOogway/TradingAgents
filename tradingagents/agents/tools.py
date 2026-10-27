@@ -289,3 +289,54 @@ def get_prediction_markets(
         str: A formatted markdown report of matching prediction markets
     """
     return route_to_vendor("get_prediction_markets", topic, limit, trade_date or None)
+
+
+@tool
+def get_options_snapshot(
+    symbol: Annotated[str, InjectedState("company_of_interest")],
+    curr_date: Annotated[str, "The current trading date, YYYY-mm-dd"],
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """
+    Retrieve a computed snapshot of the listed options market for the instrument
+    under analysis: 30-day implied volatility against realized volatility, IV
+    rank, the term structure of ATM IV, 25-delta skew and butterfly, the move each
+    expiry's straddle prices, put/call ratios, open-interest concentration by
+    strike, max pain, and the most active contracts. Every number is computed in
+    code from the chain; treat it as the source of truth for options figures.
+    Uses the configured options_data vendor.
+
+    Args:
+        curr_date (str): The current trading date, YYYY-mm-dd
+
+    Returns:
+        str: A formatted markdown report of the options market
+    """
+    return route_to_vendor("get_options_snapshot", symbol, as_of(curr_date, trade_date))
+
+
+@tool
+def get_option_chain(
+    symbol: Annotated[str, InjectedState("company_of_interest")],
+    curr_date: Annotated[str, "The current trading date, YYYY-mm-dd"],
+    expiry: Annotated[
+        str, "Expiry date YYYY-mm-dd; the nearest listed expiry is used. Empty for the first expiry a week or more out"
+    ] = "",
+    moneyness_pct: Annotated[float, "Show strikes within this percentage of the forward"] = 15.0,
+    trade_date: Annotated[str, InjectedState("trade_date")] = "",
+) -> str:
+    """
+    Retrieve one expiry of the instrument's option chain: calls and puts side by
+    side at strikes near the forward, with bid, ask and mark in USD, mark IV,
+    delta and open interest. Use it to look at a specific expiry the snapshot
+    singles out. Uses the configured options_data vendor.
+
+    Args:
+        curr_date (str): The current trading date, YYYY-mm-dd
+        expiry (str): Expiry date YYYY-mm-dd, or empty for the first expiry a week or more out
+        moneyness_pct (float): Show strikes within this percentage of the forward
+
+    Returns:
+        str: A formatted markdown table of the chain for that expiry
+    """
+    return route_to_vendor("get_option_chain", symbol, expiry, moneyness_pct, as_of(curr_date, trade_date))
