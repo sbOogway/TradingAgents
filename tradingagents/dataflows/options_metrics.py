@@ -287,6 +287,12 @@ def _usd(value: float) -> str:
     return "n/a" if value is None or math.isnan(value) else f"${_price(value)}"
 
 
+def _implied_range(forward: float, move: float) -> str:
+    if math.isnan(move):
+        return "n/a"
+    return f"{_usd(forward * (1 - move))}-{_usd(forward * (1 + move))}"
+
+
 def _expiry_label(expiry) -> str:
     return pd.Timestamp(expiry).strftime("%Y-%m-%d")
 
@@ -351,15 +357,18 @@ def format_snapshot(
         "### Term structure and skew",
         "RR25 = 25-delta call IV minus 25-delta put IV (negative: downside protection is bid). "
         "BF25 = average 25-delta wing IV minus ATM IV. Implied move = ATM straddle / forward, "
-        "the move to expiry the straddle breaks even on.",
+        "the move to expiry the straddle breaks even on; implied range = the forward plus and "
+        "minus that move. Breakevens, not probability bounds.",
         "",
-        "| Expiry | DTE | Forward | ATM IV | RR25 (pts) | BF25 (pts) | Implied move | P/C OI | P/C vol | OI notional |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "| Expiry | DTE | Forward | ATM IV | RR25 (pts) | BF25 (pts) | Implied move | Implied range "
+        "| P/C OI | P/C vol | OI notional |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for row in term.head(max_expiries).itertuples():
         lines.append(
             f"| {_expiry_label(row.expiry)} | {row.dte:.1f} | {_usd(row.forward)} | {_pct(row.atm_iv)} "
             f"| {_pts(row.rr25)} | {_pts(row.bf25)} | {_pct(row.implied_move)} "
+            f"| {_implied_range(row.forward, row.implied_move)} "
             f"| {_num(row.pc_oi)} | {_num(row.pc_volume)} | {_usd(row.oi_usd)} |"
         )
     if len(term) > max_expiries:

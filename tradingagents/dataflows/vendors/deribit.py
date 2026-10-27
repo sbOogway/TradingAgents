@@ -16,6 +16,7 @@ from __future__ import annotations
 import functools
 import logging
 import math
+import time
 from datetime import UTC, datetime, timedelta
 
 import ccxt
@@ -41,6 +42,11 @@ DVOL_CURRENCIES = frozenset({"BTC", "ETH"})
 
 IV_HISTORY_DAYS = 365
 CLOSES_DAYS = 60
+
+# How long a fetched chain is reused: an analyst's snapshot and chain calls,
+# seconds apart, then read the same quotes rather than two slightly different ones.
+CHAIN_TTL_SECONDS = 60
+_chains: dict[str, tuple[float, OptionChain]] = {}
 
 
 @functools.lru_cache(maxsize=1)
@@ -84,6 +90,15 @@ def _float(value) -> float:
 def fetch_chain(symbol: str) -> OptionChain:
     """The live Deribit option chain for a crypto symbol such as ``BTC-USD``."""
     base = _base_or_raise(symbol)
+    cached = _chains.get(base)
+    if cached and time.monotonic() - cached[0] < CHAIN_TTL_SECONDS:
+        return cached[1]
+    chain = _fetch_chain(symbol, base)
+    _chains[base] = (time.monotonic(), chain)
+    return chain
+
+
+def _fetch_chain(symbol: str, base: str) -> OptionChain:
     settle = base if base in COIN_SETTLED else "USDC"
     exchange = _exchange()
     _call(exchange.load_markets, True)  # reload: new expiries list daily

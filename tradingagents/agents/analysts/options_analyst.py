@@ -28,7 +28,7 @@ Cover, with the figures that support each point:
 - Volatility level: 30-day implied volatility against realized volatility, and IV rank / percentile where given. Is option premium rich or cheap relative to how the underlying has actually moved, and relative to its own history?
 - Term structure: upward sloping (contango) or inverted, and any expiry whose IV or implied move stands out, which usually marks an expected event.
 - Skew: what the 25-delta risk reversal and butterfly say about demand for downside protection versus upside calls, and how that changes across expiries.
-- Expected moves: the move the straddle prices to each near expiry, in percent and in price terms around the forward.
+- Expected moves: the move and the price range the straddle prices to each near expiry.
 - Positioning: put/call ratios, the strikes with the most open interest, max pain for the large near expiry, and the most active contracts. Open interest does not show who is long or short; say what the data does and does not show.
 - Implications for structures: whether the volatility picture favours buying premium (long options, debit spreads) or selling it (credit spreads, covered calls, cash-secured puts), and which expiries look best suited, conditional on a bullish, bearish or neutral view. Do not pick the direction yourself: another agent decides the trade."""
             + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."""

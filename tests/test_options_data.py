@@ -161,6 +161,8 @@ def test_oi_walls_rank_strikes_across_expiries():
 def test_snapshot_says_what_it_could_not_compute():
     out = om.format_snapshot(_chain())
     assert "30-day ATM IV" in out and "40.0%" in out
+    move = 2 * (2 * _norm_cdf(0.40 * math.sqrt(10 / 365) / 2) - 1)
+    assert f"${FORWARD * (1 - move):,.0f}-${FORWARD * (1 + move):,.0f}" in out
     assert "Realized vol: unavailable" in out
     assert "IV rank: unavailable" in out
     assert "| Expiry | DTE |" in out
@@ -205,6 +207,13 @@ def _market(base, settle, strike, kind, days=10):
         "strike": strike, "optionType": kind,
         "expiry": int((AS_OF + timedelta(days=days)).timestamp() * 1000), "option": True,
     }
+
+
+@pytest.fixture(autouse=True)
+def _no_cached_chains():
+    deribit._chains.clear()
+    yield
+    deribit._chains.clear()
 
 
 class _FakeDeribit:
@@ -264,6 +273,19 @@ def test_coin_settled_prices_convert_to_usd_and_other_coins_are_dropped():
     assert q.loc["call", "iv"] == pytest.approx(0.45)
     assert q.loc["call", "open_interest"] == 12.0
     assert chain.spot == 80_500.0 and chain.underlying == "BTC"
+
+
+@pytest.mark.unit
+def test_a_chain_is_reused_for_a_minute_then_fetched_again():
+    markets = {"BTC/USD:BTC-1-C": _market("BTC", "BTC", 80_000.0, "call")}
+    fake = _FakeDeribit(markets, {"BTC": {"BTC/USD:BTC-1-C": _ticker(0.02, 45.0, 80_500.0)}})
+    with mock.patch.object(deribit, "_exchange", return_value=fake), \
+         mock.patch.object(fake, "fetch_option_chain", wraps=fake.fetch_option_chain) as fetched, \
+         mock.patch.object(deribit.time, "monotonic", side_effect=[0.0, 30.0, 61.0, 61.0]):
+        first = deribit.fetch_chain("BTC-USD")
+        assert deribit.fetch_chain("BTC-USD") is first
+        assert deribit.fetch_chain("BTC-USD") is not first
+    assert fetched.call_count == 2
 
 
 @pytest.mark.unit
