@@ -300,8 +300,35 @@ def test_usdc_settled_prices_are_already_usd():
 @pytest.mark.unit
 def test_a_network_failure_is_vendor_unavailable_not_no_data():
     fake = _FakeDeribit({}, {}, error=ccxt.NetworkError("timed out"))
-    with mock.patch.object(deribit, "_exchange", return_value=fake), pytest.raises(VendorUnavailableError):
+    with mock.patch.object(deribit, "_exchange", return_value=fake), mock.patch.object(deribit.time, "sleep"), \
+         pytest.raises(VendorUnavailableError):
         deribit.fetch_chain("BTC-USD")
+
+
+@pytest.mark.unit
+def test_a_dropped_request_is_retried_before_the_vendor_gives_up():
+    markets = {"BTC/USD:BTC-1-C": _market("BTC", "BTC", 80_000.0, "call")}
+    fake = _FakeDeribit(markets, {"BTC": {"BTC/USD:BTC-1-C": _ticker(0.02, 45.0, 80_500.0)}})
+    flaky = mock.Mock(side_effect=[ccxt.NetworkError("reset"), fake._tickers["BTC"]])
+    with mock.patch.object(deribit, "_exchange", return_value=fake), \
+         mock.patch.object(fake, "fetch_option_chain", flaky), \
+         mock.patch.object(deribit.time, "sleep") as slept:
+        assert len(deribit.fetch_chain("BTC-USD").quotes) == 1
+    assert flaky.call_count == 2 and slept.call_count == 1
+
+
+@pytest.mark.unit
+def test_a_failed_market_refresh_falls_back_to_the_list_already_loaded():
+    markets = {"BTC/USD:BTC-1-C": _market("BTC", "BTC", 80_000.0, "call")}
+    fake = _FakeDeribit(markets, {"BTC": {"BTC/USD:BTC-1-C": _ticker(0.02, 45.0, 80_500.0)}})
+    with mock.patch.object(deribit, "_exchange", return_value=fake), \
+         mock.patch.object(fake, "load_markets", side_effect=ccxt.NetworkError("get_currencies")), \
+         mock.patch.object(deribit.time, "sleep"):
+        assert len(deribit.fetch_chain("BTC-USD").quotes) == 1
+        fake.markets = {}
+        deribit._chains.clear()
+        with pytest.raises(VendorUnavailableError):
+            deribit.fetch_chain("BTC-USD")
 
 
 @pytest.mark.unit

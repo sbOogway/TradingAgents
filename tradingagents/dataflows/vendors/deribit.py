@@ -46,6 +46,10 @@ CLOSES_DAYS = 60
 # How long a fetched chain is reused: an analyst's snapshot and chain calls,
 # seconds apart, then read the same quotes rather than two slightly different ones.
 CHAIN_TTL_SECONDS = 60
+
+# A dropped request is retried after these pauses (seconds) before the vendor is
+# reported unavailable: one blip late in a run would otherwise cost its trade.
+RETRY_PAUSES = (1.0, 3.0)
 _chains: dict[str, tuple[float, OptionChain]] = {}
 
 
@@ -55,13 +59,21 @@ def _exchange():
 
 
 def _call(fn, *args, **kwargs):
-    """A ccxt call, with its failures raised as the router's vendor errors."""
-    try:
-        return fn(*args, **kwargs)
-    except ccxt.NetworkError as exc:
-        raise VendorUnavailableError(f"Deribit request failed: {exc}") from exc
-    except ccxt.ExchangeError as exc:
-        raise VendorUnavailableError(f"Deribit returned an error: {exc}") from exc
+    """A ccxt call, with its failures raised as the router's vendor errors.
+
+    A network failure is retried after each of RETRY_PAUSES; an error Deribit
+    itself returns is not, since asking again gets the same answer.
+    """
+    for pause in (*RETRY_PAUSES, None):
+        try:
+            return fn(*args, **kwargs)
+        except ccxt.NetworkError as exc:
+            if pause is None:
+                raise VendorUnavailableError(f"Deribit request failed: {exc}") from exc
+            logger.warning("Deribit request failed (%s); retrying in %gs", exc, pause)
+            time.sleep(pause)
+        except ccxt.ExchangeError as exc:
+            raise VendorUnavailableError(f"Deribit returned an error: {exc}") from exc
 
 
 def _withheld(as_of_date: str, what: str) -> str:
@@ -101,7 +113,14 @@ def fetch_chain(symbol: str) -> OptionChain:
 def _fetch_chain(symbol: str, base: str) -> OptionChain:
     settle = base if base in COIN_SETTLED else "USDC"
     exchange = _exchange()
-    _call(exchange.load_markets, True)  # reload: new expiries list daily
+    try:
+        _call(exchange.load_markets, True)  # reload: new expiries list daily
+    except VendorUnavailableError:
+        if not exchange.markets:
+            raise
+        # The list loaded earlier in this process misses at most the day's new
+        # expiries; that beats no chain at all.
+        logger.warning("Deribit market list could not be refreshed; using the one loaded earlier")
     tickers = _call(exchange.fetch_option_chain, settle)
     as_of = datetime.now(UTC)
 
