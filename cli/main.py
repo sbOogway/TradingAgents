@@ -162,6 +162,33 @@ def backtest(
         console.print(f"[yellow]unsettled:[/yellow] {ticker}: {reason}")
 
 
+# Every coin Deribit lists options on that the pipeline knows as crypto.
+SNAPSHOT_TICKERS = "BTC-USD,ETH-USD,SOL-USD,XRP-USD,AVAX-USD"
+
+
+@app.command("snapshot-options")
+def snapshot_options(
+    tickers: str = typer.Argument(SNAPSHOT_TICKERS, help="Comma-separated crypto tickers"),
+):
+    """Save today's option chains: Deribit keeps no history, so run this daily to build one."""
+    from tradingagents.dataflows.options_store import save_chain
+    from tradingagents.dataflows.vendors.deribit import fetch_chain
+
+    root = DEFAULT_CONFIG["options_snapshot_dir"]
+    failed = []
+    for ticker in (t.strip() for t in tickers.split(",") if t.strip()):
+        try:
+            chain = fetch_chain(ticker)
+            path = save_chain(chain, root)
+        except Exception as exc:  # one coin's failure must not lose the others' snapshots
+            failed.append(ticker)
+            console.print(f"[yellow]{escape(ticker)}: not saved ({escape(str(exc))})[/yellow]")
+            continue
+        console.print(f"{ticker}: {len(chain.quotes)} contracts saved to {path}")
+    if failed:
+        raise typer.Exit(code=1)
+
+
 # The plans `login` and `logout` take: the providers signed in to, not keyed.
 Plan = StrEnum("Plan", {name: name for name in SIGNED_IN_PROVIDERS})
 

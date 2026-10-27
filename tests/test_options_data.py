@@ -386,3 +386,42 @@ def test_live_deribit_btc_snapshot():
     out = deribit.get_options_snapshot("BTC-USD")
     assert "## Options snapshot: BTC on Deribit" in out
     assert "| Expiry | DTE |" in out
+
+
+# ---------------------------------------------------------------------------
+# Snapshots
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+def test_a_snapshot_reads_back_as_the_chain_it_was_taken_from(tmp_path):
+    from tradingagents.dataflows import options_store
+
+    chain = _chain(open_interest={(10, 80_000.0, "call"): 3.5})
+    path = options_store.save_chain(chain, tmp_path)
+    assert path == tmp_path / "testvenue" / "BTC" / "2026-10-27T0800Z.csv.gz"
+    back = options_store.load_chain(path)
+    assert (back.underlying, back.venue, back.spot) == ("BTC", "TestVenue", FORWARD)
+    assert back.as_of == AS_OF
+    pd.testing.assert_frame_equal(back.quotes, chain.quotes.loc[:, list(om.CHAIN_COLUMNS)])
+    assert options_store.list_snapshots(tmp_path, "TestVenue", "btc") == [path]
+    assert not list(path.parent.glob("*.partial"))
+
+
+@pytest.mark.unit
+def test_snapshot_command_saves_each_coin_and_reports_a_failure(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    import cli.main as m
+    from tradingagents.dataflows import options_store
+
+    def fetch(ticker):
+        if ticker == "ETH-USD":
+            raise VendorUnavailableError("down")
+        return _chain()
+
+    monkeypatch.setitem(m.DEFAULT_CONFIG, "options_snapshot_dir", str(tmp_path))
+    monkeypatch.setattr(deribit, "fetch_chain", fetch)
+    result = CliRunner().invoke(m.app, ["snapshot-options", "BTC-USD,ETH-USD"])
+    assert result.exit_code == 1
+    assert "ETH-USD: not saved" in result.output
+    assert len(options_store.list_snapshots(tmp_path, "TestVenue", "BTC")) == 1

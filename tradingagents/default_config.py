@@ -84,6 +84,8 @@ def build_default_config() -> dict:
         "results_dir": os.getenv("TRADINGAGENTS_RESULTS_DIR") or os.path.join(_TRADINGAGENTS_HOME, "logs"),
         "data_cache_dir": os.getenv("TRADINGAGENTS_CACHE_DIR") or os.path.join(_TRADINGAGENTS_HOME, "cache"),
         "memory_log_path": os.getenv("TRADINGAGENTS_MEMORY_LOG_PATH") or os.path.join(_TRADINGAGENTS_HOME, "memory", "trading_memory.md"),
+        # Saved option-chain snapshots (`tradingagents snapshot-options`).
+        "options_snapshot_dir": os.getenv("TRADINGAGENTS_OPTIONS_SNAPSHOT_DIR") or os.path.join(_TRADINGAGENTS_HOME, "options_snapshots"),
         # Optional cap on the number of resolved memory log entries. When set,
         # the oldest resolved entries are pruned once this limit is exceeded.
         # Pending entries are never pruned. None disables rotation entirely.
