@@ -2,9 +2,12 @@ from tradingagents.agents.context import (
     get_instrument_context_from_state,
     get_language_instruction,
     get_portfolio_context_from_state,
+    is_options_mode,
     opponent_argument_or_opening,
+    options_report_line,
     report_or_absent,
 )
+from tradingagents.agents.risk_mgmt.options_roles import OPTIONS_ROLES, options_role_prompt
 
 
 def create_neutral_debator(llm):
@@ -41,13 +44,17 @@ Market Research Report: {market_research_report}
 Social Media Sentiment Report: {sentiment_report}
 Latest World Affairs Report: {news_report}
 Company Fundamentals Report: {fundamentals_report}
-Here is the current conversation history: {history} Here is the last response from the aggressive analyst: {current_aggressive_response} Here is the last response from the conservative analyst: {current_conservative_response}. If there are no responses from the other viewpoints yet, present your own argument based on the available data.
+{options_report_line(state, "Options Market Report")}Here is the current conversation history: {history} Here is the last response from the aggressive analyst: {current_aggressive_response} Here is the last response from the conservative analyst: {current_conservative_response}. If there are no responses from the other viewpoints yet, present your own argument based on the available data.
 
 Engage actively by analyzing both sides critically, addressing weaknesses in the aggressive and conservative arguments to advocate for a more balanced approach. Challenge each of their points to illustrate why a moderate risk strategy might offer the best of both worlds, providing growth potential while safeguarding against extreme volatility. Focus on debating rather than simply presenting data, aiming to show that a balanced view can lead to the most reliable outcomes. Output conversationally as if you are speaking without any special formatting.""" + get_language_instruction()
 
+        label = "Neutral Analyst"
+        if is_options_mode():
+            prompt, label = options_role_prompt("neutral", state), OPTIONS_ROLES["neutral"].name
+
         response = llm.invoke(prompt)
 
-        argument = f"Neutral Analyst: {response.content}"
+        argument = f"{label}: {response.content}"
 
         new_risk_debate_state = {
             "history": history + "\n" + argument,

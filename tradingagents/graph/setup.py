@@ -15,6 +15,9 @@ from tradingagents.agents import (
     create_market_analyst,
     create_neutral_debator,
     create_news_analyst,
+    create_options_analyst,
+    create_options_portfolio_manager,
+    create_options_strategist,
     create_portfolio_manager,
     create_research_manager,
     create_sentiment_analyst,
@@ -22,6 +25,7 @@ from tradingagents.agents import (
 )
 from tradingagents.agents.analysts.turn import WRAP_UP
 from tradingagents.agents.state import AgentState
+from tradingagents.dataflows.options_structures import is_tradeable
 
 from .analyst_execution import build_analyst_execution_plan
 from .conditional_logic import ConditionalLogic
@@ -43,6 +47,26 @@ RISK_ANALYSIS_PATH_MAP = {
     "Neutral Analyst": "Neutral Analyst",
     "Portfolio Manager": "Portfolio Manager",
 }
+
+
+DECISION_MODES = ("direction", "options")
+
+
+def check_decision_mode(decision_mode: str, selected_analysts) -> None:
+    """Refuse a mode the run cannot carry out, before any model is called."""
+    if decision_mode not in DECISION_MODES:
+        raise ValueError(f"unknown decision_mode {decision_mode!r}; choose from {', '.join(DECISION_MODES)}")
+    if decision_mode == "options" and "options" not in selected_analysts:
+        raise ValueError(
+            "decision_mode 'options' needs the options analyst: the structure is built "
+            "on its report and on the option chain it reads"
+        )
+
+
+def _debate_or_decide(state) -> str:
+    """Options mode: a structure within the risk limits goes to the risk debate;
+    anything else straight to the Portfolio Manager, as there is nothing to debate."""
+    return "Aggressive Analyst" if is_tradeable(state.get("options_trade") or {}) else "Portfolio Manager"
 
 
 def _tools_or_done(state) -> str:
@@ -107,7 +131,8 @@ class GraphSetup:
         self.max_tool_rounds = max_tool_rounds
 
     def setup_graph(
-        self, selected_analysts=("market", "social", "news", "fundamentals"), memory_node=None
+        self, selected_analysts=("market", "social", "news", "fundamentals"), memory_node=None,
+        decision_mode="direction",
     ):
         """Set up and compile the agent workflow graph.
 
@@ -117,9 +142,15 @@ class GraphSetup:
                 - "social": Sentiment analyst
                 - "news": News analyst
                 - "fundamentals": Fundamentals analyst
+                - "options": Options analyst
             memory_node: Node that settles past decisions and returns the run's
                 ``past_context``. It runs alongside the analysts.
+            decision_mode: "direction" ends in a Buy..Sell rating; "options" has
+                the Trader propose a priced options structure and the Portfolio
+                Manager approve or reject it.
         """
+        check_decision_mode(decision_mode, selected_analysts)
+        options_mode = decision_mode == "options"
         plan = build_analyst_execution_plan(selected_analysts)
 
         analyst_factories = {
@@ -127,17 +158,19 @@ class GraphSetup:
             "social": lambda: create_sentiment_analyst(self.quick_thinking_llm),
             "news": lambda: create_news_analyst(self.quick_thinking_llm),
             "fundamentals": lambda: create_fundamentals_analyst(self.quick_thinking_llm),
+            "options": lambda: create_options_analyst(self.quick_thinking_llm),
         }
 
         bull_researcher_node = create_bull_researcher(self.quick_thinking_llm)
         bear_researcher_node = create_bear_researcher(self.quick_thinking_llm)
-        research_manager_node = create_research_manager(self.deep_thinking_llm)
-        trader_node = create_trader(self.quick_thinking_llm)
+        research_manager_node = create_research_manager(self.deep_thinking_llm, options_mode=options_mode)
+        trader_node = (create_options_strategist if options_mode else create_trader)(self.quick_thinking_llm)
 
         aggressive_analyst = create_aggressive_debator(self.quick_thinking_llm)
         neutral_analyst = create_neutral_debator(self.quick_thinking_llm)
         conservative_analyst = create_conservative_debator(self.quick_thinking_llm)
-        portfolio_manager_node = create_portfolio_manager(self.deep_thinking_llm)
+        portfolio_manager_node = (create_options_portfolio_manager if options_mode
+                                  else create_portfolio_manager)(self.deep_thinking_llm)
 
         workflow = StateGraph(AgentState)
 
@@ -173,7 +206,11 @@ class GraphSetup:
                 DEBATE_PATH_MAP,
             )
         workflow.add_edge("Research Manager", "Trader")
-        workflow.add_edge("Trader", "Aggressive Analyst")
+        if options_mode:
+            workflow.add_conditional_edges(
+                "Trader", _debate_or_decide, ["Aggressive Analyst", "Portfolio Manager"])
+        else:
+            workflow.add_edge("Trader", "Aggressive Analyst")
         # All three risk edges share the complete RISK_ANALYSIS_PATH_MAP (#1088).
         for risk_node in ("Aggressive Analyst", "Conservative Analyst", "Neutral Analyst"):
             workflow.add_conditional_edges(

@@ -23,6 +23,7 @@ ANALYST_CHOICES = [
     ("Sentiment Analyst", AnalystType.SOCIAL),
     ("News Analyst", AnalystType.NEWS),
     ("Fundamentals Analyst", AnalystType.FUNDAMENTALS),
+    ("Options Analyst", AnalystType.OPTIONS),
 ]
 
 CRYPTO_SUFFIXES = ("-USD", "-USDT", "-USDC", "-BTC", "-ETH")
@@ -144,12 +145,13 @@ def detect_asset_type(ticker: str) -> AssetType:
 def filter_analysts_for_asset_type(
     analysts: list[AnalystType], asset_type: AssetType
 ) -> list[AnalystType]:
-    if asset_type != AssetType.CRYPTO:
-        return analysts
+    # Company fundamentals do not exist for a coin, and the options vendor
+    # (Deribit) lists crypto options only.
+    unavailable = AnalystType.FUNDAMENTALS if asset_type == AssetType.CRYPTO else AnalystType.OPTIONS
     return [
         analyst
         for analyst in analysts
-        if analyst != AnalystType.FUNDAMENTALS
+        if analyst != unavailable
     ]
 
 

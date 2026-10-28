@@ -53,6 +53,7 @@ class AgentState(MessagesState):
     sentiment_report: Annotated[str, "Report from the Sentiment Analyst"]
     news_report: Annotated[str, "Report from the News Analyst on company and world news"]
     fundamentals_report: Annotated[str, "Report from the Fundamentals Analyst"]
+    options_report: Annotated[str, "Report from the Options Analyst"]
 
     # researcher team discussion step
     investment_debate_state: Annotated[
@@ -61,6 +62,8 @@ class AgentState(MessagesState):
     investment_plan: Annotated[str, "Investment plan from the Research Manager"]
 
     trader_investment_plan: Annotated[str, "Transaction proposal from the Trader"]
+    options_chain_view: Annotated[str, "Options mode: the strike guide and chain ladder the strategist chose from, for the risk debate and the Portfolio Manager"]
+    options_trade: Annotated[dict, "Options mode: the proposed structure as priced against the chain, and the Portfolio Manager's verdict; empty otherwise"]
 
     # risk management team discussion step
     risk_debate_state: Annotated[

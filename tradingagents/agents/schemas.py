@@ -377,3 +377,215 @@ def render_sentiment_report(report: SentimentReport) -> str:
         "",
         report.narrative,
     ])
+
+
+# ---------------------------------------------------------------------------
+# Options mode
+#
+# With ``decision_mode: "options"`` the Research Manager adds a volatility view
+# to its directional call, the Trader proposes an options structure instead of a
+# buy or sell, and the Portfolio Manager approves or rejects that structure.
+# The structure is priced in code against the chain, never by the model.
+# ---------------------------------------------------------------------------
+
+
+class VolatilityView(StrEnum):
+    """Whether options are worth more or less than the move they price."""
+
+    LONG = "Long volatility"
+    NEUTRAL = "Neutral volatility"
+    SHORT = "Short volatility"
+
+
+class OptionsResearchPlan(ResearchPlan):
+    """The research plan plus the volatility view and horizon an options structure needs."""
+
+    volatility_view: VolatilityView = Field(
+        description=(
+            "Exactly one of Long volatility / Neutral volatility / Short volatility. "
+            "Long when the move you expect is larger than the options price (implied "
+            "vol cheap against the realized vol you expect); Short when options price "
+            "more movement than you expect; Neutral when they look fair."
+        ),
+    )
+    volatility_rationale: str = Field(
+        description=(
+            "The evidence for the volatility view: implied against realized "
+            "volatility, IV rank, term structure, skew and any expected event."
+        ),
+    )
+    horizon_days: int | None = Field(
+        default=None,
+        description="Days over which the view should play out, e.g. 30. Omit if unclear.",
+    )
+
+
+def render_options_research_plan(plan: OptionsResearchPlan) -> str:
+    """Render an OptionsResearchPlan: the research plan's sections plus the volatility view."""
+    horizon = f"{plan.horizon_days} days" if plan.horizon_days else "not provided"
+    return "\n".join([
+        render_research_plan(plan),
+        "",
+        f"**Volatility View**: {plan.volatility_view.value}",
+        "",
+        f"**Volatility Rationale**: {plan.volatility_rationale}",
+        "",
+        f"**Horizon**: {horizon}",
+    ])
+
+
+class OptionsStrategy(StrEnum):
+    """The structures the strategist may propose: defined risk, one expiry."""
+
+    LONG_CALL = "Long call"
+    LONG_PUT = "Long put"
+    BULL_CALL_SPREAD = "Bull call spread"
+    BEAR_PUT_SPREAD = "Bear put spread"
+    BULL_PUT_SPREAD = "Bull put spread"
+    BEAR_CALL_SPREAD = "Bear call spread"
+    IRON_CONDOR = "Iron condor"
+    IRON_BUTTERFLY = "Iron butterfly"
+    LONG_STRADDLE = "Long straddle"
+    LONG_STRANGLE = "Long strangle"
+    CASH_SECURED_PUT = "Cash-secured put"
+    NO_TRADE = "No trade"
+
+
+class OptionLegSpec(BaseModel):
+    """One leg of a proposed structure."""
+
+    side: Literal["buy", "sell"] = Field(description="buy or sell")
+    option_type: Literal["call", "put"] = Field(description="call or put")
+    strike: float = Field(description="Strike price in USD, e.g. 84000. Use a strike from the strike guide.")
+    expiry: str = Field(description="Expiry date YYYY-MM-DD, one of the listed expiries in the strike guide.")
+    quantity: float = Field(
+        default=1.0,
+        description="Units of the underlying per structure, normally 1; 2 for a ratio leg.",
+    )
+
+    @field_validator("strike", mode="before")
+    @classmethod
+    def _plain_number(cls, v):
+        # "$84,000" is a strike; a placeholder is not, and must fail the leg.
+        return _coerce_optional_float(v) if isinstance(v, str) else v
+
+
+class OptionsTradeProposal(BaseModel):
+    """The strategist's structure: legs priced afterwards in code against the chain."""
+
+    strategy: OptionsStrategy = Field(
+        description=(
+            "The structure. Pick the one that expresses both the direction and the "
+            "volatility view; No trade when neither gives an edge."
+        ),
+    )
+    legs: list[OptionLegSpec] = Field(
+        default_factory=list,
+        description="One to four legs, all on the same expiry. Empty only for No trade.",
+    )
+    rationale: str = Field(
+        description=(
+            "Why this structure, expiry and these strikes fit the research plan's "
+            "direction, volatility view and horizon. Two to five sentences."
+        ),
+    )
+    exit_plan: str = Field(
+        description=(
+            "When to take profit, when to cut the trade, and the date or event by "
+            "which to close it if neither happens."
+        ),
+    )
+
+
+def render_options_proposal(proposal: OptionsTradeProposal) -> str:
+    """Render a proposal's own fields; the priced structure check follows it."""
+    parts = [f"**Strategy**: {proposal.strategy.value}", ""]
+    if proposal.legs:
+        parts.append("**Legs**:")
+        parts += [
+            f"- {leg.side} {leg.quantity:g} x {leg.expiry} {leg.strike:g} {leg.option_type}"
+            for leg in proposal.legs
+        ]
+        parts.append("")
+    parts += [
+        f"**Rationale**: {proposal.rationale}",
+        "",
+        f"**Exit Plan**: {proposal.exit_plan}",
+    ]
+    return "\n".join(parts)
+
+
+class StructureDecision(StrEnum):
+    APPROVE = "Approve"
+    ADJUST = "Adjust"
+    REJECT = "Reject"
+
+
+class OptionsPortfolioDecision(BaseModel):
+    """The Portfolio Manager's verdict on the proposed structure, plus the directional rating."""
+
+    rating: PortfolioRating = Field(
+        description=(
+            "The directional rating on the underlying. Exactly one of Buy / "
+            "Overweight / Hold / Underweight / Sell; a non-directional structure "
+            "such as an iron condor goes with Hold."
+        ),
+    )
+    structure_decision: StructureDecision = Field(
+        description=(
+            "Approve the proposed structure as priced; Adjust it, giving the "
+            "adjusted legs, when other strikes, width or expiry from the same plan "
+            "carry the risk better; or Reject it when no structure from the plan "
+            "holds up, saying in the thesis what would have to change."
+        ),
+    )
+    adjusted_strategy: OptionsStrategy | None = Field(
+        default=None,
+        description="For Adjust only: the adjusted structure's strategy.",
+    )
+    adjusted_legs: list[OptionLegSpec] = Field(
+        default_factory=list,
+        description=(
+            "For Adjust only: the adjusted structure's legs, one to four on one "
+            "listed expiry. They are priced against the chain before any approval."
+        ),
+    )
+    executive_summary: str = Field(
+        description="The decision and how to act on it. Two to four sentences.",
+    )
+    investment_thesis: str = Field(
+        description=(
+            "The evidence that decided it, from the research plan, the priced "
+            "structure check and the risk debate; for a rejection, what would make "
+            "a structure acceptable. If prior lessons are in the prompt, use them."
+        ),
+    )
+    exit_plan: str = Field(
+        description="Profit target, loss limit, and the date or event by which to close.",
+    )
+
+
+def render_options_pm_decision(decision: OptionsPortfolioDecision) -> str:
+    """Render the decision with the ``**Rating**`` line first, as every rating reader expects."""
+    parts = [
+        f"**Rating**: {decision.rating.value}",
+        "",
+        f"**Structure Decision**: {decision.structure_decision.value}",
+        "",
+    ]
+    if decision.adjusted_legs:
+        strategy = decision.adjusted_strategy.value if decision.adjusted_strategy else "Adjusted structure"
+        parts += [f"**Adjusted Structure**: {strategy}"]
+        parts += [
+            f"- {leg.side} {leg.quantity:g} x {leg.expiry} {leg.strike:g} {leg.option_type}"
+            for leg in decision.adjusted_legs
+        ]
+        parts.append("")
+    parts += [
+        f"**Executive Summary**: {decision.executive_summary}",
+        "",
+        f"**Investment Thesis**: {decision.investment_thesis}",
+        "",
+        f"**Exit Plan**: {decision.exit_plan}",
+    ]
+    return "\n".join(parts)

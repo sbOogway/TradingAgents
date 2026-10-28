@@ -30,6 +30,7 @@ from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.analyst_execution import (
     build_analyst_execution_plan,
 )
+from tradingagents.graph.setup import DECISION_MODES
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
 
@@ -96,8 +97,18 @@ def _build_run_config(selections: dict, checkpoint: bool | None) -> dict:
     return config
 
 
+def _decision_mode(flags: dict) -> str:
+    """The run's decision mode: --mode, else TRADINGAGENTS_DECISION_MODE, else direction."""
+    mode = (flags.get("mode") or DEFAULT_CONFIG.get("decision_mode") or "direction").strip().lower()
+    if mode not in DECISION_MODES:
+        console.print(f"[red]Unknown mode {mode!r}; choose from {', '.join(DECISION_MODES)}.[/red]")
+        raise typer.Exit(code=1)
+    return mode
+
+
 def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
     flags = flags or {}
+    decision_mode = _decision_mode(flags)
     # With no terminal nothing can answer a prompt: name every question still
     # open before any model is called, rather than stopping at the first one.
     if not (sys.stdin and sys.stdin.isatty()):
@@ -116,6 +127,16 @@ def run_analysis(checkpoint: bool | None = None, portfolio=None, flags=None):
 
     # Normalize analyst selection to predefined order (selection is a 'set', order is fixed)
     selected_set = {analyst.value for analyst in selections["analysts"]}
+    config["decision_mode"] = decision_mode
+    if decision_mode == "options":
+        if selections["asset_type"] != "crypto":
+            console.print("[red]Options mode needs a crypto ticker: the options data (Deribit) "
+                          "lists crypto options only.[/red]")
+            raise typer.Exit(code=1)
+        if "options" not in selected_set:
+            selected_set.add("options")
+            console.print("[green]Options mode: adding the Options Analyst, whose report the "
+                          "structure is built on.[/green]")
     selected_analyst_keys = [a for a in ANALYST_ORDER if a in selected_set]
     analyst_execution_plan = build_analyst_execution_plan(selected_analyst_keys)
     analyst_wall_time_tracker = AnalystWallTimeTracker(analyst_execution_plan)

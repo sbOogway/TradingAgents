@@ -1,7 +1,9 @@
 from .analysts.fundamentals_analyst import create_fundamentals_analyst
 from .analysts.market_analyst import create_market_analyst
 from .analysts.news_analyst import create_news_analyst
+from .analysts.options_analyst import create_options_analyst
 from .analysts.sentiment_analyst import create_sentiment_analyst
+from .managers.options_portfolio_manager import create_options_portfolio_manager
 from .managers.portfolio_manager import create_portfolio_manager
 from .managers.research_manager import create_research_manager
 from .researchers.bear_researcher import create_bear_researcher
@@ -10,6 +12,7 @@ from .risk_mgmt.aggressive_debator import create_aggressive_debator
 from .risk_mgmt.conservative_debator import create_conservative_debator
 from .risk_mgmt.neutral_debator import create_neutral_debator
 from .state import AgentState, InvestDebateState, RiskDebateState
+from .trader.options_strategist import create_options_strategist
 from .trader.trader import create_trader
 
 __all__ = [
@@ -23,6 +26,9 @@ __all__ = [
     "create_market_analyst",
     "create_neutral_debator",
     "create_news_analyst",
+    "create_options_analyst",
+    "create_options_portfolio_manager",
+    "create_options_strategist",
     "create_aggressive_debator",
     "create_portfolio_manager",
     "create_conservative_debator",

@@ -68,6 +68,11 @@ def analyze(
         None, "--html/--no-html",
         help="Save the report as one HTML page too, complete_report.html, without asking (default: yes)",
     ),
+    mode: str = typer.Option(
+        None, "--mode",
+        help="direction (default): rate the instrument Buy..Sell. options: end in a priced options "
+        "structure to approve or reject (crypto only; adds the options analyst)",
+    ),
 ):
     """Run an analysis. This is what a bare `tradingagents` does.
 
@@ -89,7 +94,8 @@ def analyze(
             raise typer.Exit(code=1) from None
 
     try:
-        flags = {"ticker": ticker, "date": date, "analysts": analysts, "save": save, "show": show, "html": html}
+        flags = {"ticker": ticker, "date": date, "analysts": analysts, "save": save, "show": show, "html": html,
+                 "mode": mode}
         run_analysis(checkpoint=checkpoint, portfolio=portfolio_context, flags=flags)
     except _NO_CONSOLE_ERRORS:
         # A terminal with no console buffer cannot host the interactive prompts.
@@ -111,7 +117,7 @@ def backtest(
     end: str = typer.Option(..., "--end", help="Last analysis date, YYYY-MM-DD"),
     every: int = typer.Option(7, "--every", help="Days between analysis dates"),
     analysts: str = typer.Option(
-        None, "--analysts", help="Comma-separated analysts to run: market, sentiment, news, fundamentals; omit for all the asset type allows"
+        None, "--analysts", help="Comma-separated analysts to run: market, sentiment, news, fundamentals, options; omit for all the asset type allows but options, whose data is live-only"
     ),
     asset_type: str = typer.Option("stock", "--asset-type", help="stock or crypto"),
     portfolio: str = typer.Option(
@@ -128,9 +134,11 @@ def backtest(
         book = load_portfolio(portfolio) if portfolio else None
         kind = AssetType(asset_type.strip().lower())
         # The analysts are named and checked as for an analysis; without a
-        # choice, every analyst the asset type allows runs.
+        # choice, every analyst the asset type allows runs, except the options
+        # analyst: its data is live-only and withheld on every past date.
         chosen = (parse_analysts(analysts, kind) if analysts
-                  else filter_analysts_for_asset_type(list(AnalystType), kind))
+                  else [a for a in filter_analysts_for_asset_type(list(AnalystType), kind)
+                        if a != AnalystType.OPTIONS])
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from None
@@ -158,6 +166,33 @@ def backtest(
         console.print(f"[yellow]failed:[/yellow] {ticker} {date}: {reason}")
     for ticker, reason in result.settlement_failures:
         console.print(f"[yellow]unsettled:[/yellow] {ticker}: {reason}")
+
+
+# Every coin Deribit lists options on that the pipeline knows as crypto.
+SNAPSHOT_TICKERS = "BTC-USD,ETH-USD,SOL-USD,XRP-USD,AVAX-USD"
+
+
+@app.command("snapshot-options")
+def snapshot_options(
+    tickers: str = typer.Argument(SNAPSHOT_TICKERS, help="Comma-separated crypto tickers"),
+):
+    """Save today's option chains: Deribit keeps no history, so run this daily to build one."""
+    from tradingagents.dataflows.options_store import save_chain
+    from tradingagents.dataflows.vendors.deribit import fetch_chain
+
+    root = DEFAULT_CONFIG["options_snapshot_dir"]
+    failed = []
+    for ticker in (t.strip() for t in tickers.split(",") if t.strip()):
+        try:
+            chain = fetch_chain(ticker)
+            path = save_chain(chain, root)
+        except Exception as exc:  # one coin's failure must not lose the others' snapshots
+            failed.append(ticker)
+            console.print(f"[yellow]{escape(ticker)}: not saved ({escape(str(exc))})[/yellow]")
+            continue
+        console.print(f"{ticker}: {len(chain.quotes)} contracts saved to {path}")
+    if failed:
+        raise typer.Exit(code=1)
 
 
 # The plans `login` and `logout` take: the providers signed in to, not keyed.

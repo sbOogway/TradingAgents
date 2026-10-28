@@ -28,6 +28,7 @@ dependencies = [
     "stockstats>=0.6.5",
     "typing-extensions>=4.14.0",
     "yfinance>=1.7.0",
+    "ccxt>=4.4",
 ]
 
 [project.optional-dependencies]

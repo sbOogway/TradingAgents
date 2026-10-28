@@ -34,6 +34,28 @@ def get_language_instruction() -> str:
     )
 
 
+def is_options_mode() -> bool:
+    """Whether this run ends in an options structure rather than a directional call."""
+    from tradingagents.dataflows.config import get_config
+    return get_config().get("decision_mode") == "options"
+
+
+# Options mode leaves sizing to the desk: the agents never see its portfolio.
+NO_SIZING = (
+    "Do not size the position or set a risk budget: the desk sizes trades against a portfolio you "
+    "do not see. Judge the structure per unit, as the structure check states it."
+)
+
+
+def options_report_line(state: Mapping[str, Any], label: str = "Options market report") -> str:
+    """The options analyst's report as one labelled line, or nothing when the run has none.
+
+    The options analyst is opt-in, so a run without it keeps the prompt it had.
+    """
+    report = (state.get("options_report") or "").strip()
+    return f"{label}: {report}\n" if report else ""
+
+
 def opponent_argument_or_opening(text: str, opponent: str) -> str:
     """Opponent's latest argument, or an explicit opening marker when empty.
 
