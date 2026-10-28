@@ -19,6 +19,7 @@ from tradingagents.dataflows.vendors.alpha_vantage import (
 )
 from tradingagents.dataflows.vendors.deribit import (
     get_chain as get_deribit_chain,
+    get_daily_closes as get_deribit_daily_closes,
     get_option_chain as get_deribit_option_chain,
     get_options_snapshot as get_deribit_options_snapshot,
 )
@@ -96,6 +97,8 @@ TOOLS_CATEGORIES = {
             "get_option_chain",
             # Returns an OptionChain rather than text, for code that prices structures.
             "get_option_chain_data",
+            # The underlying's daily closes as a series, for realized volatility.
+            "get_underlying_closes",
         ]
     }
 }
@@ -169,6 +172,9 @@ VENDOR_METHODS = {
     },
     "get_option_chain_data": {
         "deribit": get_deribit_chain,
+    },
+    "get_underlying_closes": {
+        "deribit": get_deribit_daily_closes,
     },
 }
 

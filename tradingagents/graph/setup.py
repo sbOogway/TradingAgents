@@ -25,6 +25,7 @@ from tradingagents.agents import (
 )
 from tradingagents.agents.analysts.turn import WRAP_UP
 from tradingagents.agents.state import AgentState
+from tradingagents.dataflows.options_structures import is_tradeable
 
 from .analyst_execution import build_analyst_execution_plan
 from .conditional_logic import ConditionalLogic
@@ -60,6 +61,12 @@ def check_decision_mode(decision_mode: str, selected_analysts) -> None:
             "decision_mode 'options' needs the options analyst: the structure is built "
             "on its report and on the option chain it reads"
         )
+
+
+def _debate_or_decide(state) -> str:
+    """Options mode: a structure within the risk limits goes to the risk debate;
+    anything else straight to the Portfolio Manager, as there is nothing to debate."""
+    return "Aggressive Analyst" if is_tradeable(state.get("options_trade") or {}) else "Portfolio Manager"
 
 
 def _tools_or_done(state) -> str:
@@ -199,7 +206,11 @@ class GraphSetup:
                 DEBATE_PATH_MAP,
             )
         workflow.add_edge("Research Manager", "Trader")
-        workflow.add_edge("Trader", "Aggressive Analyst")
+        if options_mode:
+            workflow.add_conditional_edges(
+                "Trader", _debate_or_decide, ["Aggressive Analyst", "Portfolio Manager"])
+        else:
+            workflow.add_edge("Trader", "Aggressive Analyst")
         # All three risk edges share the complete RISK_ANALYSIS_PATH_MAP (#1088).
         for risk_node in ("Aggressive Analyst", "Conservative Analyst", "Neutral Analyst"):
             workflow.add_conditional_edges(

@@ -9,6 +9,7 @@ from __future__ import annotations
 from tradingagents.agents.context import (
     get_instrument_context_from_state,
     get_language_instruction,
+    options_budget_line,
     options_report_line,
 )
 from tradingagents.agents.schemas import (
@@ -27,7 +28,7 @@ VOLATILITY_BRIEF = """
 
 ---
 
-**Volatility View** (options mode, use exactly one): Long volatility / Neutral volatility / Short volatility. Judge whether the options market prices more or less movement than the evidence supports: implied against realized volatility, IV rank, the term structure, the skew and any expected event. The direction and the volatility view are separate calls; make both. Give the horizon in days over which the view should play out.
+**Volatility View** (options mode, use exactly one): Long volatility / Neutral volatility / Short volatility. Judge whether the options market prices more or less movement than the evidence supports: implied against realized volatility, IV rank, the term structure, the skew and any expected event. The direction and the volatility view are separate calls; make both. Give the horizon in days over which the view should play out. {budget_line} Size any options expression in percent of capital within it.
 
 {options_line}"""
 
@@ -43,7 +44,8 @@ def create_research_manager(llm, options_mode: bool = False):
 
         investment_debate_state = state["investment_debate_state"]
         volatility_brief = (
-            VOLATILITY_BRIEF.format(options_line=options_report_line(state)) if options_mode else ""
+            VOLATILITY_BRIEF.format(options_line=options_report_line(state), budget_line=options_budget_line())
+            if options_mode else ""
         )
         volatility_outputs = (
             "- **Volatility View**: exactly one of Long volatility / Neutral volatility / Short volatility\n"

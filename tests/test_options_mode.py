@@ -4,6 +4,7 @@ the Portfolio Manager's verdict, and the graph and CLI wiring.
 The chain is synthetic and every model is faked, so these run offline.
 """
 
+import dataclasses
 import math
 from unittest import mock
 
@@ -22,8 +23,9 @@ from tradingagents.dataflows import options_structures as st
 EXPIRY = "2026-11-26"  # _chain's 30-day expiry, (AS_OF + 30 days)
 
 
-def _ev(*legs, days=(10, 30)):
-    return st.evaluate_structure(_chain(expiry_days=days), [st.Leg(*leg) for leg in legs])
+def _ev(*legs, days=(10, 30), **kwargs):
+    return st.evaluate_structure(_chain(expiry_days=days, open_interest=100.0), [st.Leg(*leg) for leg in legs],
+                                 **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -130,6 +132,77 @@ def test_the_record_is_plain_data():
 
 
 @pytest.mark.unit
+def test_venue_fees_are_charged_on_entry_and_inside_every_figure():
+    chain = dataclasses.replace(_chain(expiry_days=(10, 30), open_interest=100.0), venue="Deribit")
+    legs = [st.Leg("sell", "put", 75_000, EXPIRY), st.Leg("buy", "put", 70_000, EXPIRY)]
+    ev = st.evaluate_structure(chain, legs)
+    short, long_ = ev.legs
+    fee = sum(min(0.0003 * FORWARD, 0.125 * p.fill) for p in ev.legs)
+    assert ev.fees == pytest.approx(fee) and fee > 0
+    credit = short.fill - long_.fill
+    assert ev.max_profit == pytest.approx(credit - fee)
+    assert ev.max_loss == pytest.approx(5_000 - credit + fee)
+    assert ev.round_trip_cost == pytest.approx((short.ask - short.bid) + (long_.ask - long_.bid) + 2 * fee)
+    assert "Venue terms (Deribit)" in st.render_evaluation(ev)
+
+
+@pytest.mark.unit
+def test_expected_pnl_at_iv_is_the_cost_of_crossing_and_realized_vol_gives_the_edge():
+    # The test chain is flat at 40% with quotes 2% either side of mark, and no fees.
+    ev = _ev(("buy", "call", 80_000, EXPIRY), realized_vol=0.60)
+    leg = ev.legs[0]
+    assert ev.expected_pnl_iv == pytest.approx(leg.mark - leg.ask, rel=1e-3)
+    assert ev.expected_pnl_rv > 0 > ev.expected_pnl_iv  # options bought below the vol realized
+    assert ev.pop_rv > ev.pop
+    text = st.render_evaluation(ev)
+    assert "at the 30-day realized volatility (60.0%)" in text
+    unknown = _ev(("buy", "call", 80_000, EXPIRY))
+    assert math.isnan(unknown.expected_pnl_rv) and "realized volatility" not in st.render_evaluation(unknown)
+
+
+@pytest.mark.unit
+def test_a_leg_without_open_interest_or_with_a_wide_spread_breaks_the_limits():
+    chain = _chain(expiry_days=(10, 30), open_interest=100.0)
+    q = chain.quotes
+    q.loc[(q["strike"] == 90_000) & (q["type"] == "call"), "open_interest"] = 0.0
+    wide = (q["strike"] == 80_000) & (q["type"] == "call")
+    q.loc[wide, "ask"] = q.loc[wide, "mark"] * 1.4
+    ev = st.evaluate_structure(chain, [st.Leg("buy", "call", 80_000, EXPIRY), st.Leg("sell", "call", 90_000, EXPIRY)])
+    assert ev.ok and not ev.tradeable
+    assert any("no open interest" in b for b in ev.breaches)
+    assert any("bid-ask spread is" in b for b in ev.breaches)
+    assert "Breaks the desk's risk limits" in st.render_evaluation(ev)
+    assert not st.is_tradeable(st.evaluation_record(ev))
+
+
+@pytest.mark.unit
+def test_a_structure_that_neither_wins_often_nor_pays_enough_breaks_the_limits():
+    # A credit spread passes on its probability of profit, an out-of-the-money debit
+    # spread on its reward to risk.
+    credit = _ev(("sell", "put", 75_000, EXPIRY), ("buy", "put", 70_000, EXPIRY))
+    assert credit.pop >= st.MIN_POP and credit.tradeable
+    assert "Risk limits: passed" in st.render_evaluation(credit)
+    debit = _ev(("buy", "call", 95_000, EXPIRY), ("sell", "call", 100_000, EXPIRY))
+    assert debit.pop < st.MIN_POP and debit.max_profit / debit.max_loss >= st.MIN_REWARD_TO_RISK
+    assert debit.tradeable
+
+    # Bought dear, the same spread rarely wins and pays less than it costs.
+    chain = _chain(expiry_days=(10, 30), open_interest=100.0)
+    q = chain.quotes
+    row = (q["strike"] == 95_000) & (q["type"] == "call")
+    q.loc[row, ["bid", "mark", "ask"]] = [2_900.0, 3_000.0, 3_100.0]
+    dear = st.evaluate_structure(chain, [st.Leg("buy", "call", 95_000, EXPIRY), st.Leg("sell", "call", 100_000, EXPIRY)])
+    assert any("neither wins often enough nor pays enough" in b for b in dear.breaches)
+
+
+@pytest.mark.unit
+def test_the_capital_one_structure_needs_follows_from_its_max_loss_and_budget():
+    assert st.capital_per_structure(267.11, 1.0) == pytest.approx(26_711.0)
+    assert math.isnan(st.capital_per_structure(267.11, None))
+    assert st.size_line(267.11, 0.5, "ETH").startswith("Size: one structure (1 ETH) per $53,422")
+
+
+@pytest.mark.unit
 def test_strike_guide_lists_expiries_in_range_with_delta_strikes():
     guide = st.strike_guide(_chain(expiry_days=(3, 10, 30, 120)))
     assert "2026-11-06" in guide and EXPIRY in guide
@@ -182,23 +255,70 @@ def _proposal(*legs, strategy="Bull call spread"):
     )
 
 
-def _strategist(llm, chain):
+def _strategist(llm, chain, closes=None):
     from tradingagents.agents.trader import options_strategist
 
-    patch = mock.patch.object(options_strategist, "route_to_vendor", return_value=chain)
+    def vendor(method, *args):
+        if method == "get_underlying_closes":
+            return closes if closes is not None else "NO_DATA_AVAILABLE: no closes"
+        return chain
+
+    patch = mock.patch.object(options_strategist, "route_to_vendor", side_effect=vendor)
     return options_strategist.create_options_strategist(llm), patch
+
+
+def _liquid(days=(10, 30)):
+    return _chain(expiry_days=days, open_interest=100.0)
 
 
 @pytest.mark.unit
 def test_strategist_prices_its_structure_and_records_it():
+    import pandas as pd
+
     llm = _StructuredLLM(_proposal(("buy", "call", 80_000, EXPIRY), ("sell", "call", 90_000, EXPIRY)))
-    node, patch = _strategist(llm, _chain(expiry_days=(10, 30)))
+    closes = pd.Series([FORWARD * (1.01 if i % 2 else 1.0) for i in range(40)])
+    node, patch = _strategist(llm, _liquid(), closes=closes)
     with patch:
-        out = node(_state())
-    assert "Structure check" in out["trader_investment_plan"] and "Max loss at expiry" in out["trader_investment_plan"]
+        out = node(_state(investment_plan="**Recommendation**: Overweight\n\n**Horizon**: 30 days"))
+    plan = out["trader_investment_plan"]
+    assert "Structure check" in plan and "Max loss at expiry" in plan and "Risk limits: passed" in plan
+    assert "at the 30-day realized volatility" in plan and "Size: one structure" in plan
     trade = out["options_trade"]
     assert trade["strategy"] == "Bull call spread" and len(trade["legs"]) == 2 and not trade["errors"]
-    assert "Strike guide" in llm.prompts[0][1]["content"]
+    assert trade["realized_vol"] > 0 and trade["limit_breaches"] == []
+    prompt = llm.prompts[0][1]["content"]
+    assert "Strike guide" in prompt and f"expiry {EXPIRY}" in prompt  # the ladder is the horizon's expiry
+    assert "Options risk budget" in llm.prompts[0][0]["content"]
+
+
+@pytest.mark.unit
+def test_strategist_gets_one_chance_to_fix_a_structure_that_breaks_a_limit():
+    chain = _liquid()
+    q = chain.quotes
+    q.loc[(q["strike"] == 95_000) & (q["type"] == "call"), "open_interest"] = 0.0
+    thin = _proposal(("sell", "call", 90_000, EXPIRY), ("buy", "call", 95_000, EXPIRY), strategy="Bear call spread")
+    fixed = _proposal(("sell", "call", 90_000, EXPIRY), ("buy", "call", 94_000, EXPIRY), strategy="Bear call spread")
+    llm = _StructuredLLM(thin, fixed)
+    node, patch = _strategist(llm, chain)
+    with patch:
+        out = node(_state())
+    assert "breaks the desk's risk limits" in llm.prompts[1][-1]["content"]
+    assert "no open interest" in llm.prompts[1][-1]["content"]
+    assert [leg["strike"] for leg in out["options_trade"]["legs"]] == [90_000, 94_000]
+    assert st.is_tradeable(out["options_trade"])
+
+
+@pytest.mark.unit
+def test_strategist_risk_budget_is_capped_at_the_desk_limit():
+    from tradingagents.dataflows.config import run_config
+
+    proposal = _proposal(("buy", "call", 80_000, EXPIRY), ("sell", "call", 90_000, EXPIRY))
+    proposal.risk_budget_pct = 5.0
+    node, patch = _strategist(_StructuredLLM(proposal), _liquid())
+    with patch, run_config({"options_risk_budget_pct": 0.5}):
+        out = node(_state())
+    assert out["options_trade"]["risk_budget_pct"] == 0.5
+    assert "**Risk Budget**: 0.5% of capital" in out["trader_investment_plan"]
 
 
 @pytest.mark.unit
@@ -206,7 +326,7 @@ def test_strategist_gets_one_chance_to_fix_a_structure_the_chain_refuses():
     bad = _proposal(("sell", "call", 90_000, EXPIRY), strategy="Bear call spread")
     good = _proposal(("sell", "call", 90_000, EXPIRY), ("buy", "call", 95_000, EXPIRY), strategy="Bear call spread")
     llm = _StructuredLLM(bad, good)
-    node, patch = _strategist(llm, _chain(expiry_days=(10, 30)))
+    node, patch = _strategist(llm, _liquid())
     with patch:
         out = node(_state())
     assert "no upper bound" in llm.prompts[1][-1]["content"]
@@ -224,7 +344,7 @@ def test_strategist_without_a_chain_proposes_no_trade():
 
 @pytest.mark.unit
 def test_strategist_no_trade_is_not_priced():
-    node, patch = _strategist(_StructuredLLM(_proposal(strategy="No trade")), _chain())
+    node, patch = _strategist(_StructuredLLM(_proposal(strategy="No trade")), _liquid())
     with patch:
         out = node(_state())
     assert out["options_trade"] == {"strategy": "No trade", "risk_budget_pct": 1.0}
@@ -250,6 +370,45 @@ def test_portfolio_manager_rules_on_the_structure_and_keeps_the_rating_line_firs
     assert "priced against the chain" in llm.prompts[0]
 
 
+def _pm(decision, **state):
+    from tradingagents.agents.managers.options_portfolio_manager import (
+        create_options_portfolio_manager,
+    )
+
+    llm = _StructuredLLM(decision)
+    return create_options_portfolio_manager(llm)(_state(trader_investment_plan="plan", **state)), llm
+
+
+def _decision(**fields):
+    base = {"rating": "Overweight", "structure_decision": "Approve", "risk_budget_pct": 1.0,
+            "executive_summary": "take it", "investment_thesis": "fits", "exit_plan": "half profit"}
+    return OptionsPortfolioDecision(**{**base, **fields})
+
+
+@pytest.mark.unit
+def test_portfolio_manager_cannot_approve_a_structure_outside_the_limits():
+    trade = {"strategy": "Bull call spread", "legs": [{"instrument": "x"}], "errors": [],
+             "limit_breaches": ["x: no open interest"]}
+    out, llm = _pm(_decision(), options_trade=trade)
+    assert out["options_trade"]["decision"] == "Reject"
+    assert "**Structure Decision**: Reject" in out["final_trade_decision"]
+    assert "Reject" in llm.prompts[0] and "within the desk's risk limits" in llm.prompts[0]
+
+
+@pytest.mark.unit
+def test_portfolio_manager_budget_is_capped_and_sized():
+    from tradingagents.dataflows.config import run_config
+
+    trade = {"strategy": "Bull put spread", "underlying": "BTC", "legs": [{"instrument": "x"}],
+             "errors": [], "limit_breaches": [], "max_loss": 4_000.0}
+    with run_config({"options_risk_budget_pct": 1.0}):
+        out, llm = _pm(_decision(risk_budget_pct=3.0), options_trade=trade)
+    assert out["options_trade"]["approved_risk_budget_pct"] == 1.0
+    assert out["options_trade"]["capital_per_structure"] == 400_000.0
+    assert "**Size**: one structure (1 BTC) per $400,000 of capital" in out["final_trade_decision"]
+    assert "Reward to risk alone does not decide" in llm.prompts[0]
+
+
 @pytest.mark.unit
 def test_research_manager_in_options_mode_asks_for_a_volatility_view():
     from tradingagents.agents.managers.research_manager import create_research_manager
@@ -259,6 +418,7 @@ def test_research_manager_in_options_mode_asks_for_a_volatility_view():
                                horizon_days=30)
     llm = _StructuredLLM(plan)
     out = create_research_manager(llm, options_mode=True)(_state())
+    assert "Options risk budget" in llm.prompts[0]
     assert "**Volatility View**: Short volatility" in out["investment_plan"]
     assert "Options market report: IV rich to realized." in llm.prompts[0]
     assert "**Horizon**: 30 days" in render_options_research_plan(plan)
@@ -326,6 +486,16 @@ def test_options_mode_builds_the_options_nodes():
                     side_effect=lambda llm: made.setdefault("pm", lambda s: {})):
         GraphSetup(_LLM(), _LLM(), ConditionalLogic(), 3).setup_graph(["options"], decision_mode="options")
     assert set(made) == {"strategist", "pm"}
+
+
+@pytest.mark.unit
+def test_only_a_structure_within_the_limits_goes_to_the_risk_debate():
+    from tradingagents.graph.setup import _debate_or_decide
+
+    priced = {"legs": [{"instrument": "x"}], "errors": [], "limit_breaches": []}
+    assert _debate_or_decide({"options_trade": priced}) == "Aggressive Analyst"
+    assert _debate_or_decide({"options_trade": {**priced, "limit_breaches": ["thin"]}}) == "Portfolio Manager"
+    assert _debate_or_decide({"options_trade": {"strategy": "No trade"}}) == "Portfolio Manager"
 
 
 @pytest.mark.unit

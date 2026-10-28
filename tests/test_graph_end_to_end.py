@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import time
 
+import numpy as np
 import pandas as pd
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -398,7 +399,9 @@ def test_an_options_mode_run_ends_in_a_priced_structure(tmp_path, monkeypatch, o
     expiry = "2026-11-26"
     called_chain: list = []
     monkeypatch.setitem(router.VENDOR_METHODS["get_option_chain_data"], "deribit",
-                        lambda *a, **k: called_chain.append(a) or _chain(expiry_days=(10, 30)))
+                        lambda *a, **k: called_chain.append(a) or _chain(expiry_days=(10, 30), open_interest=100.0))
+    closes = pd.Series(80_000 * np.exp(np.cumsum(np.tile([0.01, -0.01], 30))))
+    monkeypatch.setitem(router.VENDOR_METHODS["get_underlying_closes"], "deribit", lambda *a, **k: closes)
     monkeypatch.setitem(STRUCTURED, schemas.OptionsResearchPlan, schemas.OptionsResearchPlan(
         recommendation=schemas.PortfolioRating.OVERWEIGHT, rationale="r", strategic_actions="a",
         volatility_view=schemas.VolatilityView.SHORT, volatility_rationale="IV over RV", horizon_days=30))
@@ -424,7 +427,10 @@ def test_an_options_mode_run_ends_in_a_priced_structure(tmp_path, monkeypatch, o
     assert called_chain, "the strategist never read the chain"
     assert "**Volatility View**: Short volatility" in state["investment_plan"]
     assert "Structure check" in state["trader_investment_plan"]
+    assert "at the 30-day realized volatility" in state["trader_investment_plan"]
     assert "**Structure Decision**: Approve" in state["final_trade_decision"]
+    assert "**Size**: one structure" in state["final_trade_decision"]
+    assert state["risk_debate_state"]["count"] > 0  # a tradeable structure is debated
     trade = state["options_trade"]
     assert trade["decision"] == "Approve" and [leg["strike"] for leg in trade["legs"]] == [75_000, 70_000]
     assert trade["max_loss"] == pytest.approx(5_000 + trade["net_fill"])

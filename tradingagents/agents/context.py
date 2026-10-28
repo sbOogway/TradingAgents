@@ -51,6 +51,18 @@ OPTIONS_RISK_FOCUS = (
 )
 
 
+def options_risk_budget_pct() -> float:
+    """The desk's limit on one options structure's maximum loss, in percent of capital."""
+    from tradingagents.dataflows.config import get_config
+    return float(get_config().get("options_risk_budget_pct") or 1.0)
+
+
+def options_budget_line() -> str:
+    """The risk-budget limit as one line for an options-mode prompt."""
+    return (f"Options risk budget: the desk lets one options structure lose at most "
+            f"{options_risk_budget_pct():g}% of capital at expiry; size within that.")
+
+
 def options_risk_focus() -> str:
     """The options brief for a risk analyst, or nothing outside options mode."""
     return OPTIONS_RISK_FOCUS if is_options_mode() else ""

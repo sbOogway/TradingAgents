@@ -18,6 +18,7 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_LLM_BACKEND_URL":      "backend_url",
     "TRADINGAGENTS_OUTPUT_LANGUAGE":      "output_language",
     "TRADINGAGENTS_DECISION_MODE":        "decision_mode",
+    "TRADINGAGENTS_OPTIONS_RISK_BUDGET_PCT": "options_risk_budget_pct",
     "TRADINGAGENTS_MAX_DEBATE_ROUNDS":    "max_debate_rounds",
     "TRADINGAGENTS_MAX_RISK_ROUNDS":      "max_risk_discuss_rounds",
     "TRADINGAGENTS_MAX_TOOL_ROUNDS":      "max_tool_rounds",
@@ -136,6 +137,9 @@ def build_default_config() -> dict:
         # "options" (crypto, with the options analyst) ends in a priced options
         # structure the Portfolio Manager approves or rejects.
         "decision_mode": "direction",
+        # Options mode: the most one structure may lose at expiry, in percent of
+        # capital. The strategist and the Portfolio Manager size within it.
+        "options_risk_budget_pct": 1.0,
         # Debate and discussion settings
         "max_debate_rounds": 1,
         "max_risk_discuss_rounds": 1,

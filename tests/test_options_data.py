@@ -42,7 +42,13 @@ def _black76(forward, strike, years, iv, call):
 
 
 def _chain(expiry_days=(10, 40), smile=lambda k, f: 0.40, open_interest=None, volume=None) -> om.OptionChain:
-    """A chain priced by Black-76 off a known smile, so the expected metrics are known."""
+    """A chain priced by Black-76 off a known smile, so the expected metrics are known.
+
+    ``open_interest`` is a number for every contract, or a dict by (days, strike, kind).
+    """
+    if isinstance(open_interest, (int, float)):
+        open_interest = {(d, float(k), kind): float(open_interest) for d in expiry_days
+                         for k in np.arange(50_000, 110_001, 1_000.0) for kind in ("call", "put")}
     rows = []
     for days in expiry_days:
         expiry = pd.Timestamp(AS_OF + timedelta(days=days))

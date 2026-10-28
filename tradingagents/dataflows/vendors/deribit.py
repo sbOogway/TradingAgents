@@ -220,6 +220,14 @@ def get_chain(symbol: str, curr_date: str | None = None) -> OptionChain:
     return fetch_chain(symbol)
 
 
+def get_daily_closes(symbol: str, curr_date: str | None = None) -> pd.Series:
+    """The underlying's completed daily closes, for realized volatility; withheld for a past date."""
+    base = _base_or_raise(symbol)
+    if is_historical(curr_date):
+        raise NoMarketDataError(symbol, detail=f"{VENUE} closes are fetched live; withheld for {curr_date}")
+    return fetch_daily_closes(base)
+
+
 def get_option_chain(
     symbol: str, expiry: str = "", moneyness_pct: float = 15.0, curr_date: str | None = None
 ) -> str:
