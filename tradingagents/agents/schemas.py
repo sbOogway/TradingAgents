@@ -495,20 +495,6 @@ class OptionsTradeProposal(BaseModel):
             "which to close it if neither happens."
         ),
     )
-    risk_budget_pct: float | None = Field(
-        default=None,
-        description=(
-            "Suggested maximum loss for this trade as a percentage of capital, e.g. "
-            "1.0 for 1%. Omit if you cannot state one."
-        ),
-    )
-
-    @field_validator("risk_budget_pct", mode="before")
-    @classmethod
-    def _nullish_float_to_none(cls, v):
-        if isinstance(v, str) and v.strip().endswith("%"):
-            v = v.strip()[:-1]
-        return _coerce_optional_float(v)
 
 
 def render_options_proposal(proposal: OptionsTradeProposal) -> str:
@@ -521,19 +507,17 @@ def render_options_proposal(proposal: OptionsTradeProposal) -> str:
             for leg in proposal.legs
         ]
         parts.append("")
-    budget = f"{proposal.risk_budget_pct:g}% of capital" if proposal.risk_budget_pct is not None else "not provided"
     parts += [
         f"**Rationale**: {proposal.rationale}",
         "",
         f"**Exit Plan**: {proposal.exit_plan}",
-        "",
-        f"**Risk Budget**: {budget}",
     ]
     return "\n".join(parts)
 
 
 class StructureDecision(StrEnum):
     APPROVE = "Approve"
+    ADJUST = "Adjust"
     REJECT = "Reject"
 
 
@@ -549,16 +533,21 @@ class OptionsPortfolioDecision(BaseModel):
     )
     structure_decision: StructureDecision = Field(
         description=(
-            "Approve the proposed structure as priced, or Reject it. Reject when its "
-            "risk, cost, liquidity or fit with the research plan does not hold up; "
-            "say in the thesis what would have to change."
+            "Approve the proposed structure as priced; Adjust it, giving the "
+            "adjusted legs, when other strikes, width or expiry from the same plan "
+            "carry the risk better; or Reject it when no structure from the plan "
+            "holds up, saying in the thesis what would have to change."
         ),
     )
-    risk_budget_pct: float | None = Field(
+    adjusted_strategy: OptionsStrategy | None = Field(
         default=None,
+        description="For Adjust only: the adjusted structure's strategy.",
+    )
+    adjusted_legs: list[OptionLegSpec] = Field(
+        default_factory=list,
         description=(
-            "For an approved structure, the maximum loss to accept as a percentage "
-            "of capital, e.g. 1.0 for 1%. Omit when rejecting."
+            "For Adjust only: the adjusted structure's legs, one to four on one "
+            "listed expiry. They are priced against the chain before any approval."
         ),
     )
     executive_summary: str = Field(
@@ -575,28 +564,28 @@ class OptionsPortfolioDecision(BaseModel):
         description="Profit target, loss limit, and the date or event by which to close.",
     )
 
-    @field_validator("risk_budget_pct", mode="before")
-    @classmethod
-    def _nullish_float_to_none(cls, v):
-        if isinstance(v, str) and v.strip().endswith("%"):
-            v = v.strip()[:-1]
-        return _coerce_optional_float(v)
-
 
 def render_options_pm_decision(decision: OptionsPortfolioDecision) -> str:
     """Render the decision with the ``**Rating**`` line first, as every rating reader expects."""
-    budget = (f"{decision.risk_budget_pct:g}% of capital at maximum loss"
-              if decision.risk_budget_pct is not None else "not provided")
-    return "\n".join([
+    parts = [
         f"**Rating**: {decision.rating.value}",
         "",
         f"**Structure Decision**: {decision.structure_decision.value}",
         "",
-        f"**Risk Budget**: {budget}",
-        "",
+    ]
+    if decision.adjusted_legs:
+        strategy = decision.adjusted_strategy.value if decision.adjusted_strategy else "Adjusted structure"
+        parts += [f"**Adjusted Structure**: {strategy}"]
+        parts += [
+            f"- {leg.side} {leg.quantity:g} x {leg.expiry} {leg.strike:g} {leg.option_type}"
+            for leg in decision.adjusted_legs
+        ]
+        parts.append("")
+    parts += [
         f"**Executive Summary**: {decision.executive_summary}",
         "",
         f"**Investment Thesis**: {decision.investment_thesis}",
         "",
         f"**Exit Plan**: {decision.exit_plan}",
-    ])
+    ]
+    return "\n".join(parts)

@@ -368,13 +368,6 @@ def is_tradeable(record: dict) -> bool:
     return bool(record.get("legs")) and not record.get("errors") and not record.get("limit_breaches")
 
 
-def capital_per_structure(max_loss: float, risk_budget_pct: float | None) -> float:
-    """Capital one structure needs for its maximum loss to be ``risk_budget_pct`` of it."""
-    if not risk_budget_pct or risk_budget_pct <= 0 or not (max_loss > 0):
-        return math.nan
-    return max_loss / (risk_budget_pct / 100.0)
-
-
 # ---------------------------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------------------------
@@ -383,20 +376,11 @@ def _money(value: float) -> str:
     return om._usd(value)
 
 
-def size_line(max_loss: float, risk_budget_pct: float | None, unit: str) -> str:
-    """How much capital one structure needs at a risk budget, or "" when either is unknown."""
-    capital = capital_per_structure(max_loss, risk_budget_pct)
-    if not math.isfinite(capital):
-        return ""
-    return (f"Size: one structure (1 {unit}) per {_money(capital)} of capital, so its maximum loss "
-            f"is {risk_budget_pct:g}% of it")
-
-
-def render_evaluation(ev: StructureEvaluation, risk_budget_pct: float | None = None) -> str:
+def render_evaluation(ev: StructureEvaluation) -> str:
     """The structure check the rest of the desk reads: the legs as filled and the payoff at expiry.
 
-    ``risk_budget_pct`` is the desk's limit on one structure's maximum loss, in
-    percent of capital; the check then says how much capital one structure needs.
+    Every figure is per structure as listed; how many to trade is the desk's call,
+    made against a portfolio the agents do not see.
     """
     stamp = pd.Timestamp(ev.as_of).strftime("%Y-%m-%d %H:%M UTC") if ev.as_of is not None else "n/a"
     lines = [f"#### Structure check (computed from the {ev.venue} chain at {stamp})"]
@@ -455,9 +439,6 @@ def render_evaluation(ev: StructureEvaluation, risk_budget_pct: float | None = N
         f"- Net greeks now: delta {om._num(g['delta'])} {unit}, gamma {g['gamma']:.6f}, "
         f"vega {_money(g['vega'])} per vol point, theta {_money(g['theta'])} per day",
     ]
-    size = size_line(ev.max_loss, risk_budget_pct, unit)
-    if size:
-        lines.append(f"- {size}")
     if ev.notes:
         lines += ["", "Adjusted to listed contracts:"] + [f"- {n}" for n in ev.notes]
     lines.append("")

@@ -40,32 +40,11 @@ def is_options_mode() -> bool:
     return get_config().get("decision_mode") == "options"
 
 
-# What the risk analysts argue about when the trader's plan is a priced options structure.
-OPTIONS_RISK_FOCUS = (
-    "\n\nThe trader's plan is an options structure with a structure check priced in code against "
-    "the chain. Argue about that structure using the check's computed figures, not figures of your "
-    "own: its maximum loss against its payoff and probability of profit, what it bets on volatility "
-    "(vega), what time decay (theta) costs over the horizon, gamma risk near expiry, the bid-ask "
-    "cost of getting in and out, and whether the expiry and strikes fit the move the options price "
-    "and the skew. Say whether another structure from the same plan would carry the risk better."
+# Options mode leaves sizing to the desk: the agents never see its portfolio.
+NO_SIZING = (
+    "Do not size the position or set a risk budget: the desk sizes trades against a portfolio you "
+    "do not see. Judge the structure per unit, as the structure check states it."
 )
-
-
-def options_risk_budget_pct() -> float:
-    """The desk's limit on one options structure's maximum loss, in percent of capital."""
-    from tradingagents.dataflows.config import get_config
-    return float(get_config().get("options_risk_budget_pct") or 1.0)
-
-
-def options_budget_line() -> str:
-    """The risk-budget limit as one line for an options-mode prompt."""
-    return (f"Options risk budget: the desk lets one options structure lose at most "
-            f"{options_risk_budget_pct():g}% of capital at expiry; size within that.")
-
-
-def options_risk_focus() -> str:
-    """The options brief for a risk analyst, or nothing outside options mode."""
-    return OPTIONS_RISK_FOCUS if is_options_mode() else ""
 
 
 def options_report_line(state: Mapping[str, Any], label: str = "Options market report") -> str:

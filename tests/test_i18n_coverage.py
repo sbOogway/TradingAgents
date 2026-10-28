@@ -29,6 +29,7 @@ REPORT_AGENTS = [
     "risk_mgmt/aggressive_debator.py",
     "risk_mgmt/conservative_debator.py",
     "risk_mgmt/neutral_debator.py",
+    "risk_mgmt/options_roles.py",
     "trader/trader.py",
     "trader/options_strategist.py",
     "managers/options_portfolio_manager.py",

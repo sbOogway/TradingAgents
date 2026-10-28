@@ -2,11 +2,12 @@ from tradingagents.agents.context import (
     get_instrument_context_from_state,
     get_language_instruction,
     get_portfolio_context_from_state,
+    is_options_mode,
     opponent_argument_or_opening,
     options_report_line,
-    options_risk_focus,
     report_or_absent,
 )
+from tradingagents.agents.risk_mgmt.options_roles import OPTIONS_ROLES, options_role_prompt
 
 
 def create_aggressive_debator(llm):
@@ -45,11 +46,15 @@ Latest World Affairs Report: {news_report}
 Company Fundamentals Report: {fundamentals_report}
 {options_report_line(state, "Options Market Report")}Here is the current conversation history: {history} Here are the last arguments from the conservative analyst: {current_conservative_response} Here are the last arguments from the neutral analyst: {current_neutral_response}. If there are no responses from the other viewpoints yet, present your own argument based on the available data.
 
-Engage actively by addressing any specific concerns raised, refuting the weaknesses in their logic, and asserting the benefits of risk-taking to outpace market norms. Maintain a focus on debating and persuading, not just presenting data. Challenge each counterpoint to underscore why a high-risk approach is optimal. Output conversationally as if you are speaking without any special formatting.""" + options_risk_focus() + get_language_instruction()
+Engage actively by addressing any specific concerns raised, refuting the weaknesses in their logic, and asserting the benefits of risk-taking to outpace market norms. Maintain a focus on debating and persuading, not just presenting data. Challenge each counterpoint to underscore why a high-risk approach is optimal. Output conversationally as if you are speaking without any special formatting.""" + get_language_instruction()
+
+        label = "Aggressive Analyst"
+        if is_options_mode():
+            prompt, label = options_role_prompt("aggressive", state), OPTIONS_ROLES["aggressive"].name
 
         response = llm.invoke(prompt)
 
-        argument = f"Aggressive Analyst: {response.content}"
+        argument = f"{label}: {response.content}"
 
         new_risk_debate_state = {
             "history": history + "\n" + argument,

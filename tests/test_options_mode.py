@@ -196,13 +196,6 @@ def test_a_structure_that_neither_wins_often_nor_pays_enough_breaks_the_limits()
 
 
 @pytest.mark.unit
-def test_the_capital_one_structure_needs_follows_from_its_max_loss_and_budget():
-    assert st.capital_per_structure(267.11, 1.0) == pytest.approx(26_711.0)
-    assert math.isnan(st.capital_per_structure(267.11, None))
-    assert st.size_line(267.11, 0.5, "ETH").startswith("Size: one structure (1 ETH) per $53,422")
-
-
-@pytest.mark.unit
 def test_strike_guide_lists_expiries_in_range_with_delta_strikes():
     guide = st.strike_guide(_chain(expiry_days=(3, 10, 30, 120)))
     assert "2026-11-06" in guide and EXPIRY in guide
@@ -250,45 +243,55 @@ class _StructuredLLM:
 def _proposal(*legs, strategy="Bull call spread"):
     return OptionsTradeProposal(
         strategy=strategy, rationale="fits the plan", exit_plan="close at 50% of max profit",
-        risk_budget_pct=1.0,
         legs=[{"side": s, "option_type": t, "strike": k, "expiry": e} for s, t, k, e in legs],
     )
 
 
-def _strategist(llm, chain, closes=None):
-    from tradingagents.agents.trader import options_strategist
+def _vendor(chain, closes=None):
+    """The options pricer's router, answering from a test chain."""
+    from tradingagents.agents import options_pricing
 
     def vendor(method, *args):
         if method == "get_underlying_closes":
             return closes if closes is not None else "NO_DATA_AVAILABLE: no closes"
         return chain
 
-    patch = mock.patch.object(options_strategist, "route_to_vendor", side_effect=vendor)
-    return options_strategist.create_options_strategist(llm), patch
+    return mock.patch.object(options_pricing, "route_to_vendor", side_effect=vendor)
+
+
+def _strategist(llm, chain, closes=None):
+    from tradingagents.agents.trader import options_strategist
+
+    return options_strategist.create_options_strategist(llm), _vendor(chain, closes)
 
 
 def _liquid(days=(10, 30)):
     return _chain(expiry_days=days, open_interest=100.0)
 
 
-@pytest.mark.unit
-def test_strategist_prices_its_structure_and_records_it():
+def _closes():
     import pandas as pd
 
+    return pd.Series([FORWARD * (1.01 if i % 2 else 1.0) for i in range(40)])
+
+
+@pytest.mark.unit
+def test_strategist_prices_its_structure_and_records_it():
     llm = _StructuredLLM(_proposal(("buy", "call", 80_000, EXPIRY), ("sell", "call", 90_000, EXPIRY)))
-    closes = pd.Series([FORWARD * (1.01 if i % 2 else 1.0) for i in range(40)])
-    node, patch = _strategist(llm, _liquid(), closes=closes)
+    node, patch = _strategist(llm, _liquid(), closes=_closes())
     with patch:
         out = node(_state(investment_plan="**Recommendation**: Overweight\n\n**Horizon**: 30 days"))
     plan = out["trader_investment_plan"]
     assert "Structure check" in plan and "Max loss at expiry" in plan and "Risk limits: passed" in plan
-    assert "at the 30-day realized volatility" in plan and "Size: one structure" in plan
+    assert "at the 30-day realized volatility" in plan
+    assert "Risk Budget" not in plan and "Size" not in plan  # sizing is the desk's call
     trade = out["options_trade"]
     assert trade["strategy"] == "Bull call spread" and len(trade["legs"]) == 2 and not trade["errors"]
-    assert trade["realized_vol"] > 0 and trade["limit_breaches"] == []
+    assert trade["realized_vol"] > 0 and trade["limit_breaches"] == [] and "risk_budget_pct" not in trade
     prompt = llm.prompts[0][1]["content"]
     assert "Strike guide" in prompt and f"expiry {EXPIRY}" in prompt  # the ladder is the horizon's expiry
-    assert "Options risk budget" in llm.prompts[0][0]["content"]
+    assert "Do not size the position" in llm.prompts[0][0]["content"]
+    assert out["options_chain_view"] in prompt
 
 
 @pytest.mark.unit
@@ -306,19 +309,6 @@ def test_strategist_gets_one_chance_to_fix_a_structure_that_breaks_a_limit():
     assert "no open interest" in llm.prompts[1][-1]["content"]
     assert [leg["strike"] for leg in out["options_trade"]["legs"]] == [90_000, 94_000]
     assert st.is_tradeable(out["options_trade"])
-
-
-@pytest.mark.unit
-def test_strategist_risk_budget_is_capped_at_the_desk_limit():
-    from tradingagents.dataflows.config import run_config
-
-    proposal = _proposal(("buy", "call", 80_000, EXPIRY), ("sell", "call", 90_000, EXPIRY))
-    proposal.risk_budget_pct = 5.0
-    node, patch = _strategist(_StructuredLLM(proposal), _liquid())
-    with patch, run_config({"options_risk_budget_pct": 0.5}):
-        out = node(_state())
-    assert out["options_trade"]["risk_budget_pct"] == 0.5
-    assert "**Risk Budget**: 0.5% of capital" in out["trader_investment_plan"]
 
 
 @pytest.mark.unit
@@ -347,66 +337,99 @@ def test_strategist_no_trade_is_not_priced():
     node, patch = _strategist(_StructuredLLM(_proposal(strategy="No trade")), _liquid())
     with patch:
         out = node(_state())
-    assert out["options_trade"] == {"strategy": "No trade", "risk_budget_pct": 1.0}
+    assert out["options_trade"] == {"strategy": "No trade"}
     assert "Structure check" not in out["trader_investment_plan"]
 
 
-@pytest.mark.unit
-def test_portfolio_manager_rules_on_the_structure_and_keeps_the_rating_line_first():
+def _pm(*decisions, chain=None, **state):
     from tradingagents.agents.managers.options_portfolio_manager import (
         create_options_portfolio_manager,
     )
 
-    decision = OptionsPortfolioDecision(
-        rating="Overweight", structure_decision="Approve", risk_budget_pct="0.5%",
-        executive_summary="take it", investment_thesis="fits", exit_plan="half profit")
-    llm = _StructuredLLM(decision)
-    trade = {"strategy": "Bull call spread", "legs": [{"instrument": "x"}], "errors": []}
-    out = create_options_portfolio_manager(llm)(_state(options_trade=trade, trader_investment_plan="plan"))
-    assert out["final_rating"] == "Overweight"
-    assert out["final_trade_decision"].startswith("**Rating**: Overweight")
-    assert out["options_trade"]["decision"] == "Approve"
-    assert out["options_trade"]["approved_risk_budget_pct"] == 0.5
-    assert "priced against the chain" in llm.prompts[0]
-
-
-def _pm(decision, **state):
-    from tradingagents.agents.managers.options_portfolio_manager import (
-        create_options_portfolio_manager,
-    )
-
-    llm = _StructuredLLM(decision)
-    return create_options_portfolio_manager(llm)(_state(trader_investment_plan="plan", **state)), llm
+    llm = _StructuredLLM(*decisions)
+    with _vendor(chain if chain is not None else _liquid()):
+        out = create_options_portfolio_manager(llm)(_state(trader_investment_plan="plan", **state))
+    return out, llm
 
 
 def _decision(**fields):
-    base = {"rating": "Overweight", "structure_decision": "Approve", "risk_budget_pct": 1.0,
+    base = {"rating": "Overweight", "structure_decision": "Approve",
             "executive_summary": "take it", "investment_thesis": "fits", "exit_plan": "half profit"}
     return OptionsPortfolioDecision(**{**base, **fields})
 
 
+PRICED = {"strategy": "Bull call spread", "legs": [{"instrument": "x", "strike": 80_000.0}], "errors": [],
+          "limit_breaches": []}
+
+
+@pytest.mark.unit
+def test_portfolio_manager_rules_on_the_structure_and_keeps_the_rating_line_first():
+    out, llm = _pm(_decision(), options_trade=PRICED)
+    assert out["final_rating"] == "Overweight"
+    assert out["final_trade_decision"].startswith("**Rating**: Overweight")
+    assert out["options_trade"]["decision"] == "Approve"
+    assert "Risk Budget" not in out["final_trade_decision"]
+    assert "priced against the chain" in llm.prompts[0]
+    assert "Reward to risk alone does not decide" in llm.prompts[0] and "Do not size" in llm.prompts[0]
+
+
 @pytest.mark.unit
 def test_portfolio_manager_cannot_approve_a_structure_outside_the_limits():
-    trade = {"strategy": "Bull call spread", "legs": [{"instrument": "x"}], "errors": [],
-             "limit_breaches": ["x: no open interest"]}
+    trade = {**PRICED, "limit_breaches": ["x: no open interest"]}
     out, llm = _pm(_decision(), options_trade=trade)
     assert out["options_trade"]["decision"] == "Reject"
     assert "**Structure Decision**: Reject" in out["final_trade_decision"]
-    assert "Reject" in llm.prompts[0] and "within the desk's risk limits" in llm.prompts[0]
+    assert "cannot be approved as it is" not in llm.prompts[0]  # no chain view, so no adjustment offered
+    assert "No option chain was available" in llm.prompts[0]
+
+
+def _adjust_to(*legs, strategy="Bull call spread"):
+    return _decision(structure_decision="Adjust", adjusted_strategy=strategy,
+                     adjusted_legs=[{"side": s, "option_type": t, "strike": k, "expiry": e} for s, t, k, e in legs])
 
 
 @pytest.mark.unit
-def test_portfolio_manager_budget_is_capped_and_sized():
-    from tradingagents.dataflows.config import run_config
+def test_an_adjustment_is_priced_and_shown_back_before_it_is_approved():
+    adjust = _adjust_to(("buy", "call", 80_000, EXPIRY), ("sell", "call", 85_000, EXPIRY))
+    out, llm = _pm(adjust, _decision(), options_trade=PRICED, options_chain_view="ladder")
+    assert len(llm.prompts) == 2
+    assert "Structure check" in llm.prompts[1] and "Approve this adjusted structure" in llm.prompts[1]
+    trade = out["options_trade"]
+    assert trade["decision"] == "Approve" and [leg["strike"] for leg in trade["legs"]] == [80_000, 85_000]
+    assert trade["adjusted_from"]["legs"] == PRICED["legs"]
+    text = out["final_trade_decision"]
+    assert "**Adjusted Structure**: Bull call spread" in text and "Structure check" in text
 
-    trade = {"strategy": "Bull put spread", "underlying": "BTC", "legs": [{"instrument": "x"}],
-             "errors": [], "limit_breaches": [], "max_loss": 4_000.0}
-    with run_config({"options_risk_budget_pct": 1.0}):
-        out, llm = _pm(_decision(risk_budget_pct=3.0), options_trade=trade)
-    assert out["options_trade"]["approved_risk_budget_pct"] == 1.0
-    assert out["options_trade"]["capital_per_structure"] == 400_000.0
-    assert "**Size**: one structure (1 BTC) per $400,000 of capital" in out["final_trade_decision"]
-    assert "Reward to risk alone does not decide" in llm.prompts[0]
+
+@pytest.mark.unit
+def test_an_adjustment_outside_the_limits_is_rejected_without_a_second_question():
+    chain = _liquid()
+    q = chain.quotes
+    q.loc[(q["strike"] == 85_000) & (q["type"] == "call"), "open_interest"] = 0.0
+    adjust = _adjust_to(("buy", "call", 80_000, EXPIRY), ("sell", "call", 85_000, EXPIRY))
+    out, llm = _pm(adjust, chain=chain, options_trade=PRICED, options_chain_view="ladder")
+    assert len(llm.prompts) == 1
+    trade = out["options_trade"]
+    assert trade["decision"] == "Reject" and trade["legs"] == PRICED["legs"]
+    assert trade["adjustment"]["limit_breaches"]
+    assert "breaks the desk's risk limits" in out["final_trade_decision"]
+
+
+@pytest.mark.unit
+def test_an_adjustment_not_confirmed_once_priced_is_rejected():
+    adjust = _adjust_to(("buy", "call", 80_000, EXPIRY), ("sell", "call", 85_000, EXPIRY))
+    out, _ = _pm(adjust, _decision(structure_decision="Adjust"), options_trade=PRICED, options_chain_view="ladder")
+    assert out["options_trade"]["decision"] == "Reject"
+    assert "not confirmed once priced" in out["final_trade_decision"]
+
+
+@pytest.mark.unit
+def test_a_structure_outside_the_limits_can_be_adjusted_into_them():
+    trade = {**PRICED, "limit_breaches": ["x: no open interest"]}
+    adjust = _adjust_to(("buy", "call", 80_000, EXPIRY), ("sell", "call", 85_000, EXPIRY))
+    out, llm = _pm(adjust, _decision(), options_trade=trade, options_chain_view="ladder")
+    assert "Reject, or Adjust" in llm.prompts[0] and "ladder" in llm.prompts[0]
+    assert out["options_trade"]["decision"] == "Approve" and st.is_tradeable(out["options_trade"])
 
 
 @pytest.mark.unit
@@ -418,15 +441,17 @@ def test_research_manager_in_options_mode_asks_for_a_volatility_view():
                                horizon_days=30)
     llm = _StructuredLLM(plan)
     out = create_research_manager(llm, options_mode=True)(_state())
-    assert "Options risk budget" in llm.prompts[0]
+    assert "Do not size the position" in llm.prompts[0] and "standard allocation" not in llm.prompts[0]
     assert "**Volatility View**: Short volatility" in out["investment_plan"]
     assert "Options market report: IV rich to realized." in llm.prompts[0]
     assert "**Horizon**: 30 days" in render_options_research_plan(plan)
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("name", ["aggressive", "conservative", "neutral"])
-def test_risk_analysts_get_the_options_brief_only_in_options_mode(name):
+@pytest.mark.parametrize(("name", "role"), [("aggressive", "Trade Advocate"),
+                                            ("conservative", "Tail-Risk Sceptic"),
+                                            ("neutral", "Structurer")])
+def test_risk_seats_take_options_roles_only_in_options_mode(name, role):
     import importlib
 
     from tradingagents.dataflows.config import run_config
@@ -444,12 +469,15 @@ def test_risk_analysts_get_the_options_brief_only_in_options_mode(name):
 
     llm = _LLM()
     with run_config({"decision_mode": "options"}):
-        factory(llm)(_state())
-    factory(llm)(_state(options_report=""))
-    assert "structure check priced in code" in llm.prompts[0]
-    assert "Options Market Report: IV rich to realized." in llm.prompts[0]
-    assert "structure check" not in llm.prompts[1] and "Options Market Report" not in llm.prompts[1]
-
+        out = factory(llm)(_state(options_chain_view="LADDER"))
+    plain = factory(llm)(_state(options_report="", options_chain_view="LADDER"))
+    options_prompt, direction_prompt = llm.prompts
+    assert f"You are the {role}" in options_prompt and "Do not size the position" in options_prompt
+    assert "Options market report: IV rich to realized." in options_prompt
+    assert ("LADDER" in options_prompt) == (name == "neutral")  # only the Structurer gets the chain
+    assert out["risk_debate_state"]["history"].endswith(f"{role}: argument")
+    assert role not in direction_prompt and "Options Market Report" not in direction_prompt
+    assert plain["risk_debate_state"]["latest_speaker"] == out["risk_debate_state"]["latest_speaker"]
 
 # ---------------------------------------------------------------------------
 # Graph and CLI

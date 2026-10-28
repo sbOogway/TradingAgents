@@ -411,7 +411,7 @@ def test_an_options_mode_run_ends_in_a_priced_structure(tmp_path, monkeypatch, o
               schemas.OptionLegSpec(side="buy", option_type="put", strike=70_000, expiry=expiry)]))
     monkeypatch.setitem(STRUCTURED, schemas.OptionsPortfolioDecision, schemas.OptionsPortfolioDecision(
         rating=schemas.PortfolioRating.OVERWEIGHT, structure_decision=schemas.StructureDecision.APPROVE,
-        risk_budget_pct=1.0, executive_summary="s", investment_thesis="t", exit_plan="e"))
+        executive_summary="s", investment_thesis="t", exit_plan="e"))
 
     cfg = copy.deepcopy(DEFAULT_CONFIG)
     cfg.update(results_dir=str(tmp_path / "results"), data_cache_dir=str(tmp_path / "cache"),
@@ -429,7 +429,7 @@ def test_an_options_mode_run_ends_in_a_priced_structure(tmp_path, monkeypatch, o
     assert "Structure check" in state["trader_investment_plan"]
     assert "at the 30-day realized volatility" in state["trader_investment_plan"]
     assert "**Structure Decision**: Approve" in state["final_trade_decision"]
-    assert "**Size**: one structure" in state["final_trade_decision"]
+    assert state["options_chain_view"].startswith("Strike guide")
     assert state["risk_debate_state"]["count"] > 0  # a tradeable structure is debated
     trade = state["options_trade"]
     assert trade["decision"] == "Approve" and [leg["strike"] for leg in trade["legs"]] == [75_000, 70_000]
